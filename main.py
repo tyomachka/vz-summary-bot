@@ -128,14 +128,19 @@ def gclient() -> genai.Client:
     return _client
 
 
-def gemini_call(prompt: str, max_tokens: int = 16384, temperature: float = 0.3) -> str:
+def gemini_call(
+    prompt: str,
+    max_tokens: int = 16384,
+    temperature: float = 0.3,
+    json_mode: bool = False,
+) -> str:
+    cfg_kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
+    if json_mode:
+        cfg_kwargs["response_mime_type"] = "application/json"
     resp = gclient().models.generate_content(
         model=GEMINI_MODEL,
         contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-        ),
+        config=types.GenerateContentConfig(**cfg_kwargs),
     )
     return (resp.text or "").strip()
 
@@ -213,14 +218,18 @@ ARTICLES:
 def gemini_extract(articles: list[dict]) -> dict:
     block = ""
     for a in articles:
-        body = a["body"][:8000]
+        body = a["body"][:5000]
         block += f"\n\n=== URL: {a['url']} ===\n=== TITLE: {a['title']} ===\n{body}"
-    raw = gemini_call(EXTRACTION_PROMPT + block, max_tokens=16384, temperature=0.3)
+    raw = gemini_call(
+        EXTRACTION_PROMPT + block,
+        max_tokens=32768,
+        temperature=0.3,
+        json_mode=True,
+    )
     text = strip_fences(raw)
     try:
         return json.loads(text)
-    except json.JSONDecodeError as e:
-        # Try to salvage by finding the outermost {...}
+    except json.JSONDecodeError:
         i, j = text.find("{"), text.rfind("}")
         if i >= 0 and j > i:
             return json.loads(text[i:j + 1])
