@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.env.local
+*.log
+probe_artifacts/
+probe_artifacts_browser/
+.DS_Store
+.vscode/
+.idea/
