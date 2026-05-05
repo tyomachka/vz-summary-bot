@@ -490,27 +490,7 @@ _REACT_COLORS = {
     "neutral": "#57606a", "unknown": "#8c959f",
 }
 
-_EMAIL_STYLE = """<style>
-.vz-wrap{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;font-size:14px;line-height:1.5}
-.vz-meta{font-size:12px;color:#8c959f;margin-bottom:14px;letter-spacing:.3px}
-.vz-h2{font-size:14px;color:#8c959f;text-transform:uppercase;letter-spacing:.6px;margin:24px 0 12px;font-weight:600}
-.vz-brief{border:1px solid #d0d7de;border-left:4px solid #0969da;border-radius:8px;padding:14px 18px;margin:0 0 20px}
-.vz-brief ul{margin:0;padding-left:20px}
-.vz-brief li{margin:8px 0;line-height:1.5}
-.vz-card{border:1px solid #d0d7de;border-radius:8px;padding:16px 18px;margin:0 0 16px;max-width:680px}
-.vz-head{border-bottom:1px dashed #d0d7de;padding-bottom:12px;margin-bottom:12px}
-.vz-tag{font-size:11px;color:#8c959f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-.vz-tag .lb{color:#cf222e;font-weight:600}
-.vz-h3{margin:0 0 8px;font-size:15px;line-height:1.35;font-weight:600}
-.vz-h3 a{color:#0969da;text-decoration:none}
-.vz-ev{margin:0;padding:8px 12px;border-left:3px solid #d0d7de;color:#8c959f;font-size:13px;font-style:italic}
-.vz-ev div{margin:2px 0}
-.vz-row{margin:0 0 8px;font-size:13px;line-height:1.5}
-.vz-row:last-child{margin-bottom:0}
-.vz-row b{font-weight:600;margin-right:4px}
-.vz-badge{display:inline-block;color:#fff;padding:2px 9px;border-radius:4px;font-weight:600;font-size:12px;margin-right:6px;white-space:nowrap}
-.vz-sub{color:#8c959f;font-weight:400}
-</style>"""
+_F = "-apple-system,Segoe UI,Roboto,sans-serif"
 
 
 def _esc(s) -> str:
@@ -522,69 +502,78 @@ def _join(items, sep=" · "):
     return sep.join(_esc(x) for x in items if x) if items else "—"
 
 
+def _row(icon: str, label: str, content: str) -> str:
+    return (f'<div style="margin:0 0 9px;font-size:13px;line-height:1.5">'
+            f'<strong>{icon} {label}:</strong> {content}</div>')
+
+
+def _badge(label: str, color: str) -> str:
+    return (f'<span style="display:inline-block;background:{color};color:#fff;'
+            f'padding:2px 9px;border-radius:4px;font-weight:600;font-size:12px;'
+            f'margin-right:6px;white-space:nowrap">{_esc(label)}</span>')
+
+
 def _render_card(item: dict) -> str:
-    a_type = _esc((item.get("article_type") or "other").replace("_", " "))
-    importance = _esc(item.get("importance") or "—")
+    a_type = _esc((item.get("article_type") or "other").replace("_", " ").upper())
+    importance = _esc((item.get("importance") or "—").upper())
     confidence = _esc(item.get("confidence") or "—")
-    liveblog = ' · <span class="lb">🔴 LIVEBLOG</span>' if item.get("is_liveblog") else ""
+    liveblog = (' · <strong style="color:#cf222e">🔴 LIVEBLOG</strong>'
+                if item.get("is_liveblog") else "")
 
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
 
     snips = (item.get("evidence_lt") or [])[:3]
-    ev_html = "".join(f'<div>"{_esc(s)}"</div>' for s in snips)
+    ev_html = "".join(
+        f'<div style="margin:3px 0">"{_esc(s)}"</div>' for s in snips
+    )
 
     public = item.get("public_tickers") or []
     private = item.get("private_or_unknown") or []
-    if public:
-        tickers_str = ", ".join(
-            f'{_esc(p["ticker"])} <span class="vz-sub">({_esc(p["exchange"])})</span>'
-            for p in public
-        )
-    else:
-        tickers_str = "—"
+    tickers_str = (", ".join(
+        f'{_esc(p["ticker"])} <span style="color:#8c959f">({_esc(p["exchange"])})</span>'
+        for p in public
+    ) if public else "—")
 
     fund = (item.get("signal_fundamental") or "neutral").lower()
     react = (item.get("signal_market_reaction") or "neutral").lower()
-    fund_color = _FUND_COLORS.get(fund, "#57606a")
-    react_color = _REACT_COLORS.get(react, "#57606a")
-
-    monitor = item.get("monitor") or []
-    monitor_html = (f'<div class="vz-row"><b>👁 Monitor:</b> {_join(monitor)}</div>'
-                    if monitor else "")
+    signal_html = (_badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
+                   + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#57606a")))
 
     key_numbers = item.get("key_numbers") or []
-    kn_html = (f'<div class="vz-row"><b>🔢 Key numbers:</b> {_join(key_numbers)}</div>'
-               if key_numbers else "")
-
-    private_html = (f'<div class="vz-row"><b>🏷 Private/unclear:</b> {_join(private)}</div>'
-                    if private else "")
+    monitor = item.get("monitor") or []
 
     return (
-        '<div class="vz-card">'
-        '<div class="vz-head">'
-        f'<div class="vz-tag">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
-        f'<div class="vz-h3"><a href="{url}">{headline}</a></div>'
-        + (f'<div class="vz-ev">{ev_html}</div>' if ev_html else '')
+        f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
+        f'margin:0 0 16px;font-family:{_F};max-width:680px">'
+
+        # --- header with dashed divider ---
+        f'<div style="border-bottom:1px dashed #444c56;padding-bottom:12px;margin-bottom:14px">'
+        f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+        f'letter-spacing:.5px;margin-bottom:6px">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
+        f'<div style="margin:0 0 10px;font-size:15px;font-weight:600;line-height:1.35">'
+        f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
+        + (f'<div style="padding:8px 12px;border-left:3px solid #444c56;'
+           f'color:#8c959f;font-size:13px;font-style:italic">{ev_html}</div>'
+           if ev_html else '')
         + '</div>'
-        + f'<div class="vz-row"><b>🧭 What happened:</b> {_esc(item.get("what_happened_en") or "")}</div>'
-        + kn_html
-        + f'<div class="vz-row"><b>🎯 Direct:</b> {_join(item.get("affected_direct"))}</div>'
-        + f'<div class="vz-row"><b>🔗 Indirect:</b> {_join(item.get("affected_indirect"))}</div>'
-        + f'<div class="vz-row"><b>📊 Tickers:</b> {tickers_str}</div>'
-        + private_html
-        + '<div class="vz-row"><b>📈 Signal:</b> '
-        f'<span class="vz-badge" style="background:{fund_color}">Fundamental: {_esc(fund)}</span>'
-        f'<span class="vz-badge" style="background:{react_color}">Market: {_esc(react)}</span>'
-        '</div>'
-        f'<div class="vz-row"><b>💡 Investor meaning:</b> {_esc(item.get("investor_meaning_en") or "")}</div>'
-        + monitor_html
+
+        # --- body rows ---
+        + _row("🧭", "What happened", _esc(item.get("what_happened_en") or ""))
+        + (_row("🔢", "Key numbers", _join(key_numbers)) if key_numbers else "")
+        + _row("🎯", "Direct", _join(item.get("affected_direct")))
+        + _row("🔗", "Indirect", _join(item.get("affected_indirect")))
+        + _row("📊", "Tickers", tickers_str)
+        + (_row("🏷", "Private/unclear", _join(private)) if private else "")
+        + f'<div style="margin:0 0 9px;font-size:13px">'
+          f'<strong>📈 Signal:</strong> {signal_html}</div>'
+        + _row("💡", "Investor meaning", _esc(item.get("investor_meaning_en") or ""))
+        + (_row("👁", "Monitor", _join(monitor)) if monitor else "")
         + '</div>'
     )
 
 
 def _brief_bullets(validated: list[dict], n: int = 5) -> list[str]:
-    """Pick top-N items for the executive brief, with Baltic-relevance tiebreaker."""
     def sort_key(x):
         rank = _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3)
         baltic = 0 if x.get("is_baltic") else 1
@@ -596,14 +585,14 @@ def _brief_bullets(validated: list[dict], n: int = 5) -> list[str]:
         if len(meaning) > 160:
             meaning = meaning[:157].rstrip() + "…"
         headline = (it.get("headline_en") or "").strip()
-        out.append(f"<b>{_esc(headline)}.</b> {_esc(meaning)}")
+        out.append(f"<strong>{_esc(headline)}.</strong> {_esc(meaning)}")
     return out
 
 
 def render_html(validated: list[dict], today: dt.date) -> str:
+    wrap = f'font-family:{_F};max-width:720px;font-size:14px;line-height:1.5'
     if not validated:
-        return (_EMAIL_STYLE +
-                '<div class="vz-wrap"><p>No new investing-relevant VŽ articles in this period.</p></div>')
+        return f'<div style="{wrap}"><p>No new investing-relevant VŽ articles in this period.</p></div>'
 
     cards = sorted(
         validated,
@@ -614,17 +603,29 @@ def render_html(validated: list[dict], today: dt.date) -> str:
     )
     bullets = _brief_bullets(validated, n=min(5, len(validated)))
 
-    parts = [_EMAIL_STYLE, '<div class="vz-wrap">',
-             f'<div class="vz-meta">Investment Brief · {today.isoformat()} · '
-             f'{len(validated)} signals</div>']
+    h2 = (f'font-family:{_F};font-size:13px;color:#8c959f;text-transform:uppercase;'
+          f'letter-spacing:.6px;margin:28px 0 12px;font-weight:600')
+
+    parts = [
+        f'<div style="{wrap}">',
+        f'<div style="font-size:12px;color:#8c959f;margin-bottom:16px;font-family:{_F}">'
+        f'Investment Brief · {today.isoformat()} · {len(validated)} signals</div>',
+    ]
 
     if bullets:
-        parts.append('<h2 class="vz-h2">A · Executive Brief</h2>')
-        parts.append('<div class="vz-brief"><ul>')
-        parts.extend(f'<li>{b}</li>' for b in bullets)
+        parts.append(f'<h2 style="{h2}">A · Executive Brief</h2>')
+        parts.append(
+            f'<div style="border:1px solid #444c56;border-left:4px solid #4493f8;'
+            f'border-radius:8px;padding:14px 18px;margin:0 0 20px;font-family:{_F}">'
+            f'<ul style="margin:0;padding-left:20px">'
+        )
+        parts.extend(
+            f'<li style="margin:8px 0;font-size:14px;line-height:1.5">{b}</li>'
+            for b in bullets
+        )
         parts.append('</ul></div>')
 
-    parts.append('<h2 class="vz-h2">B · Top Signals</h2>')
+    parts.append(f'<h2 style="{h2}">B · Top Signals</h2>')
     parts.extend(_render_card(c) for c in cards)
     parts.append('</div>')
     return "".join(parts)
