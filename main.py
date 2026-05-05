@@ -134,9 +134,9 @@ def gclient() -> genai.Client:
 # Retryable HTTP codes: 429 rate-limit, 500/502/503/504 transient server errors.
 # Anything else (e.g. 400 bad request, 401 auth, 403 quota-permanent) fails fast.
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
-_MAX_ATTEMPTS = 6
+_MAX_ATTEMPTS = 10
 _BASE_DELAY_S = 2.0
-_MAX_DELAY_S = 60.0
+_MAX_DELAY_S = 120.0
 
 
 def _is_retryable(exc: Exception) -> bool:
