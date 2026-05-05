@@ -329,44 +329,133 @@ def strip_fences(text: str) -> str:
     return text.strip()
 
 
-EXTRACTION_PROMPT = """You are an investment-news analyst processing Lithuanian Verslo žinios articles. Output ONLY valid JSON matching the schema. No prose, no code fences, no HTML, no commentary.
+EXTRACTION_PROMPT = """You are an investment-news analyst processing Lithuanian Verslo žinios articles.
+Output ONLY valid JSON matching the schema below. No prose, no code fences, no HTML, no commentary.
 
-ANALYSIS LOGIC:
-1. First, classify the article into one "article_type" (see schema). A useful investment summary may be a macro signal, sector risk, regulation watch, private-company signal, or low_relevance skip — DO NOT force every article into a public-company shape.
-2. Ignore: ads, "Rekomenduojame", "Verslo tribūna", sponsored blocks, footers, unsubscribe text, contact info, repeated recommendations, lifestyle/culture items unless investment-relevant.
-3. If article_type is "low_relevance" or "sponsored_or_ad", you may still output the item with minimal fields (url + article_type + headline_en); Python drops it.
-4. If the article appears to be a liveblog / "Dienos pulsas" / "Dienos akcentai" / timestamped market ticker, set is_liveblog=true.
+═══════════════════════════════════════════
+STEP 1 — CLASSIFY each article into exactly one article_type:
+direct_public_company | private_company | sector_signal | macro_signal |
+commodity_signal | geopolitical_signal | regulation_policy | market_overview |
+personal_finance | educational | low_relevance | sponsored_or_ad
 
-HARD RULES (violation = invalid output):
-- "url" must match the URL provided for that article exactly.
-- Every "evidence_lt" snippet must be a verbatim Lithuanian substring of THAT article's body. 8–15 words. No paraphrasing, no translation. Prefer snippets that contain numbers.
-- 2–7 evidence snippets per item. If you can't find ≥2 snippets, omit the item entirely.
-- NEVER output BUY / SELL / HOLD / "rekomenduoja pirkti" type advice.
-- NEVER output analyst price targets or analyst ratings.
-- NEVER invent tickers — list company names in "candidate_companies" exactly as written in the article; Python validates against a static map. DO NOT include a "tickers" field.
-- Numbers in key_numbers and investor_meaning_en must come from the article body, not your prior knowledge.
-- For regulation/policy, hedge in what_happened_en if the change is proposed/draft/non-final ("siūloma", "svarstoma", "projektas").
-- For public companies, separate fundamental signal (the underlying event) from market reaction (what the stock did).
-- Do not duplicate the same story across digest + full article. If two URLs cover the same event, output only the one with longer body.
+═══════════════════════════════════════════
+STEP 2 — FILTER. Output these as low_relevance with skip_reason (minimal fields only):
+• Sponsored / "Rekomenduojame" / "Verslo tribūna" / advertorial → skip_reason: "sponsored"
+• Lifestyle, gastronomy, culture, travel → skip_reason: "lifestyle"
+• Generic educational explainers with no near-term tradable signal → skip_reason: "educational"
+• Narrow legal/court news with no investable implication → skip_reason: "legal, no market impact"
+• Crime, culture, non-market politics → skip_reason: "not market-relevant"
 
-Schema (per item):
+Conditionally include (only with clear market/regulation/sector angle):
+VERSLO APLINKA, VADYBA, ĮŽVALGOS, MANO VERSLAS, RINKODARA, MANO PINIGAI
+
+Always include: FINANSAI, RINKOS, STATYBA IR NT, PRAMONĖ, ENERGETIKA,
+PREKYBA, LOGISTIKA, INOVACIJOS, DIRBTINIS INTELEKTAS, FINANCIAL TIMES
+
+═══════════════════════════════════════════
+STEP 3 — DEDUP. If two URLs cover the same story (same company + same event):
+• Mark the shorter/digest version as low_relevance with skip_reason: "duplicate: prefer <other URL>"
+• Never produce two cards for the same company + event theme.
+• Liveblogs ("Dienos pulsas", "Dienos akcentai", timestamped tickers) → set is_liveblog=true.
+  They go in a separate section; do NOT treat them as main cards.
+
+═══════════════════════════════════════════
+STEP 4 — IMPORTANCE (be strict; max 5 HIGH per run):
+HIGH:
+  • Public company earnings/guidance/M&A with direct price impact
+  • Oil/rates/inflation shock with clear transmission mechanism
+  • Listed Baltic company result or major trading move
+  • Major sector-wide data with concrete investable conclusion
+MEDIUM:
+  • Private company investment ≥ €50M
+  • Sector stress or structural shift
+  • Local regulation with real cost/revenue impact
+  • Indirect macro relevance
+LOW → skip or Watchlist:
+  • Generic education, lifestyle, weak opinion, sponsored
+  • Narrow legal with no investable implication
+  • Vague bilateral trade
+  • Private local business story without scale
+
+═══════════════════════════════════════════
+STEP 5 — EVIDENCE SNIPPETS (2–7 per card):
+• Each snippet: verbatim Lithuanian substring of THAT article's body. MAX 12 WORDS.
+• Prefer snippets with numbers.
+• No paraphrasing, no translation, no full paragraphs.
+• If you cannot find ≥2 snippets, output item as low_relevance with skip_reason: "insufficient evidence".
+GOOD: "apie 200 mln. Eur Kairių"
+BAD:  "2026–2027 metais didieji projektai turės daug įtakos viso sektoriaus rodikliams..."
+
+═══════════════════════════════════════════
+STEP 6 — KEY NUMBERS (max 5 per card):
+• Only numbers that change investment interpretation.
+• Every number MUST appear verbatim in THIS article's body only.
+• Never carry numbers from another article. Never invent numbers.
+
+═══════════════════════════════════════════
+STEP 7 — TICKERS:
+• List in candidate_companies ONLY companies DIRECTLY NAMED in the article whose event directly affects them.
+• Do NOT add sector-proxy companies to candidate_companies.
+• If a company is clearly public (e.g. Micron, ConocoPhillips, Pinterest, eBay, GameStop) name it — Python maps to ticker.
+• For useful proxies NOT in the article, use ticker_proxies list.
+• Never invent ticker symbols. Python validates all names.
+
+═══════════════════════════════════════════
+STEP 8 — SIGNALS:
+• signal_fundamental: your analysis of the event's investment quality.
+  Values: bullish | bearish | mixed | neutral | unclear
+• signal_market_reaction: ONLY if article text explicitly states how a stock/index/asset moved.
+  Values: positive | negative | neutral | unknown
+  DEFAULT = "unknown". Do NOT guess market reaction.
+
+═══════════════════════════════════════════
+STEP 9 — EXECUTIVE BRIEF BULLET (brief_bullet field):
+Write ONE complete English sentence:
+• ≤22 words. NO ellipsis. NO trailing "…". Complete sentence, full stop.
+• Must contain a concrete number OR a clear market implication.
+• Write like a human editor, not an AI summary.
+GOOD: "Norway resumes gas field production, adding ~2 bcm/year to Europe's supply buffer."
+BAD:  "Norway resumes exploitation of several fields, boosting gas supply to Europe..."
+
+═══════════════════════════════════════════
+STEP 10 — TRADABILITY:
+direct     = listed company directly affected; can be traded now
+indirect   = sector/macro effect; tradable via ETF or proxy
+watch-only = private, state-owned, or no clear near-term tradable instrument
+
+═══════════════════════════════════════════
+HARD RULES (any violation = drop the item in Python):
+• url must exactly match the URL provided for that article.
+• Every evidence_lt snippet must be a verbatim substring of THAT article's body. ≤12 words.
+• Never output BUY / SELL / HOLD or analyst price targets or ratings.
+• Never invent tickers — list company names in candidate_companies exactly as written.
+• Numbers in key_numbers come from this article only.
+• Hedge in what_happened_en if a policy is proposed/draft/non-final.
+• Two articles covering the same event → only one gets a full card.
+
+═══════════════════════════════════════════
+JSON SCHEMA (one object per article):
 {
   "url": "<exact URL provided>",
-  "article_type": "direct_public_company|private_company|sector_signal|macro_signal|commodity_signal|geopolitical_signal|regulation_policy|market_overview|personal_finance|educational|low_relevance|sponsored_or_ad",
+  "article_type": "<type from STEP 1>",
   "is_liveblog": false,
   "importance": "high|medium|low",
   "confidence": "high|medium|low",
-  "headline_en": "<<=12 words>",
-  "evidence_lt": ["<verbatim LT snippet 8-15 words>", "..."],
-  "what_happened_en": "<1-2 factual sentences; hedge if proposed/not final>",
-  "key_numbers": ["<number + brief context>", "..."],
-  "candidate_companies": ["<company name as written in article>", "..."],
-  "affected_direct": ["<companies/sectors/countries directly mentioned>"],
+  "headline_en": "<≤12 words>",
+  "brief_bullet": "<≤22 words, complete sentence, no ellipsis, must have a number or market implication>",
+  "evidence_lt": ["<verbatim LT, ≤12 words, prefer with numbers>", ...],
+  "what_happened_en": "<1–2 factual sentences; hedge if proposed/not final>",
+  "key_numbers": ["<number + brief context, max 5>", ...],
+  "candidate_companies": ["<name exactly as written in article>", ...],
+  "ticker_proxies": ["<company not in article but possibly affected — optional>"],
+  "affected_direct": ["<directly mentioned companies/sectors/countries>"],
   "affected_indirect": ["<sectors/assets/markets possibly affected>"],
   "signal_fundamental": "bullish|bearish|mixed|neutral|unclear",
   "signal_market_reaction": "positive|negative|neutral|unknown",
-  "investor_meaning_en": "<2-3 sentences: short-term signal + longer-term context. Do not overclaim.>",
-  "monitor": ["<optional point to watch next>", "..."]
+  "tradability": "direct|indirect|watch-only",
+  "investor_meaning_en": "<2–3 sentences covering short-term signal and long-term context. No filler. No BUY/SELL/HOLD.>",
+  "monitor": ["<specific concrete thing to watch next>", ...],
+  "skip_reason": "<only for low_relevance/sponsored/duplicate items, else omit>"
 }
 
 Output exactly: {"items": [<item>, <item>, ...]}
@@ -402,10 +491,11 @@ def normalize_text(s: str) -> str:
 
 _DROP_TYPES = {"low_relevance", "sponsored_or_ad"}
 _IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
+_MAX_HIGH = 5       # max cards allowed at HIGH importance
+_MAX_MAIN = 8       # max non-liveblog cards in Top Signals
 
 
 def _lookup_ticker(name: str) -> dict | None:
-    """Case-insensitive substring match against TICKER_MAP."""
     if not name:
         return None
     n = name.strip().lower()
@@ -417,60 +507,111 @@ def _lookup_ticker(name: str) -> dict | None:
     return None
 
 
-def validate(extracted: dict, articles: list[dict]) -> list[dict]:
+def _has_number_in_body(num_str: str, body_norm: str) -> bool:
+    """Check that any digit-containing token from the key_number appears in the article body."""
+    import re
+    tokens = re.findall(r"[\d][^\s]*", normalize_text(num_str))
+    return any(t in body_norm for t in tokens) if tokens else True
+
+
+def _theme_key(item: dict) -> str:
+    """Group items by primary entity for theme-based dedup."""
+    entity = ((item.get("affected_direct") or [""])[0]).strip().lower()[:40]
+    sig_words = sorted(
+        w.lower() for w in (item.get("headline_en") or "").split() if len(w) > 4
+    )[:4]
+    return entity + "|" + " ".join(sig_words)
+
+
+def validate(extracted: dict, articles: list[dict]) -> dict:
+    """
+    Returns {"main": [...], "liveblogs": [...], "skipped": [...]}.
+    main     = non-liveblog items that passed all checks, capped at _MAX_MAIN.
+    liveblogs = is_liveblog=True items (market-relevant only).
+    skipped  = dropped items with reason strings for section F.
+    """
     by_url = {a["url"]: a for a in articles}
     raw_items = extracted.get("items", []) or []
-    cleaned: list[dict] = []
+    skipped: list[dict] = []
 
+    def _skip(item, reason):
+        skipped.append({
+            "headline_en": item.get("headline_en") or item.get("url") or "—",
+            "article_type": item.get("article_type") or "—",
+            "reason": reason,
+        })
+
+    # ── Pass 1: basic validation ──────────────────────────────────────
+    passed: list[dict] = []
     for item in raw_items:
         a_type = (item.get("article_type") or "").strip().lower()
+
         if a_type in _DROP_TYPES:
-            print(f"  drop ({a_type}): {item.get('url')}")
+            reason = item.get("skip_reason") or a_type
+            _skip(item, reason)
             continue
 
         a = by_url.get(item.get("url"))
         if not a:
-            print(f"  drop (unknown url): {item.get('url')}")
+            _skip(item, "unknown url")
             continue
 
         body_norm = normalize_text(a["body"])
-        snippets = item.get("evidence_lt") or []
-        valid_snippets = [s for s in snippets if s and normalize_text(s) in body_norm]
-        if len(valid_snippets) < 2:
-            print(f"  drop (<2 valid evidence snippets): {item.get('url')}")
-            continue
-        item["evidence_lt"] = valid_snippets
 
-        # Resolve company names against ticker map.
-        public, private = [], []
-        seen = set()
+        # Evidence validation
+        snippets = [s for s in (item.get("evidence_lt") or []) if s]
+        valid_snips = [s for s in snippets if normalize_text(s) in body_norm]
+        if len(valid_snips) < 2 and not item.get("is_liveblog"):
+            _skip(item, "fewer than 2 evidence snippets verified in body")
+            continue
+        item["evidence_lt"] = valid_snips[:7]
+
+        # Key-number cross-article contamination check
+        clean_nums = [
+            n for n in (item.get("key_numbers") or [])
+            if _has_number_in_body(n, body_norm)
+        ]
+        item["key_numbers"] = clean_nums[:5]
+
+        # Ticker resolution
+        public, companies_private, tickers_unclear = [], [], []
+        seen: set[str] = set()
         for name in item.get("candidate_companies") or []:
             info = _lookup_ticker(name)
+            key = name.strip().lower()
             if info is None:
-                key = name.strip().lower()
                 if key and key not in seen:
-                    private.append(name.strip())
+                    tickers_unclear.append(name.strip())
+                    seen.add(key)
+            elif info["ticker"].startswith("N/A"):
+                if key not in seen:
+                    companies_private.append(name.strip())
                     seen.add(key)
             else:
-                key = info["ticker"]
-                if key not in seen:
-                    if key.startswith("N/A"):
-                        private.append(f"{name.strip()} ({key})")
-                    else:
-                        public.append(info)
-                    seen.add(key)
+                t = info["ticker"]
+                if t not in seen:
+                    public.append(info)
+                    seen.add(t)
+
         item["public_tickers"] = public
-        item["private_or_unknown"] = private
-
+        item["companies_private"] = companies_private
+        item["tickers_unclear"] = tickers_unclear
         item["is_baltic"] = any(p.get("country") in _BALTIC_COUNTRIES for p in public)
-        cleaned.append(item)
 
-    # Dedup: by URL first (already enforced via by_url) then by headline prefix.
+        # Ensure brief_bullet has no ellipsis (patch if Gemini violated the rule)
+        bullet = (item.get("brief_bullet") or "").strip()
+        if bullet.endswith("…") or bullet.endswith("..."):
+            bullet = bullet.rstrip(".… ").rstrip(",").rstrip() + "."
+            item["brief_bullet"] = bullet
+
+        passed.append(item)
+
+    # ── Pass 2: headline-prefix dedup ────────────────────────────────
     by_headline: dict[str, dict] = {}
-    for item in cleaned:
+    for item in passed:
         key = (item.get("headline_en") or "").strip().lower()[:30]
         if not key:
-            by_headline[item.get("url", id(item))] = item
+            by_headline[item.get("url", str(id(item)))] = item
             continue
         existing = by_headline.get(key)
         if existing is None:
@@ -479,9 +620,55 @@ def validate(extracted: dict, articles: list[dict]) -> list[dict]:
             er = _IMPORTANCE_RANK.get((existing.get("importance") or "low").lower(), 3)
             ir = _IMPORTANCE_RANK.get((item.get("importance") or "low").lower(), 3)
             if ir < er:
+                _skip(existing, f"dedup: superseded by higher-importance variant")
                 by_headline[key] = item
-                print(f"  dedup: kept higher-importance variant for '{key}'")
-    return list(by_headline.values())
+            else:
+                _skip(item, "dedup: duplicate headline")
+    deduped = list(by_headline.values())
+
+    # ── Pass 3: theme-based dedup (same entity + similar headline) ───
+    theme_map: dict[str, dict] = {}
+    final_passed: list[dict] = []
+    for item in deduped:
+        tk = _theme_key(item)
+        existing = theme_map.get(tk)
+        if existing is None:
+            theme_map[tk] = item
+            final_passed.append(item)
+        else:
+            # Keep the one with more evidence; drop the other
+            if len(item.get("evidence_lt") or []) > len(existing.get("evidence_lt") or []):
+                _skip(existing, "theme-dedup: merged into richer card")
+                theme_map[tk] = item
+                final_passed = [i for i in final_passed if i is not existing]
+                final_passed.append(item)
+            else:
+                _skip(item, "theme-dedup: merged into richer card")
+
+    # ── Pass 4: split liveblogs / main; enforce HIGH cap ────────────
+    liveblogs = [i for i in final_passed if i.get("is_liveblog")]
+    main_candidates = [i for i in final_passed if not i.get("is_liveblog")]
+
+    main_candidates.sort(key=lambda x: (
+        _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3),
+        0 if x.get("is_baltic") else 1,
+    ))
+
+    # Cap HIGH labels
+    high_count = 0
+    for item in main_candidates:
+        if (item.get("importance") or "low").lower() == "high":
+            high_count += 1
+            if high_count > _MAX_HIGH:
+                item["importance"] = "medium"
+                print(f"  demoted to medium (HIGH cap): {item.get('headline_en')}")
+
+    # Cap total main cards
+    main = main_candidates[:_MAX_MAIN]
+    for item in main_candidates[_MAX_MAIN:]:
+        _skip(item, "card cap: beyond max 8 main signals")
+
+    return {"main": main, "liveblogs": liveblogs, "skipped": skipped}
 
 
 _FUND_COLORS = {
@@ -491,6 +678,9 @@ _FUND_COLORS = {
 _REACT_COLORS = {
     "positive": "#1a7f37", "negative": "#cf222e",
     "neutral": "#57606a", "unknown": "#8c959f",
+}
+_TRADE_COLORS = {
+    "direct": "#0969da", "indirect": "#9a6700", "watch-only": "#57606a",
 }
 
 _F = "-apple-system,Segoe UI,Roboto,sans-serif"
@@ -510,10 +700,10 @@ def _row(icon: str, label: str, content: str) -> str:
             f'<strong>{icon} {label}:</strong> {content}</div>')
 
 
-def _badge(label: str, color: str) -> str:
+def _badge(text: str, color: str) -> str:
     return (f'<span style="display:inline-block;background:{color};color:#fff;'
             f'padding:2px 9px;border-radius:4px;font-weight:600;font-size:12px;'
-            f'margin-right:6px;white-space:nowrap">{_esc(label)}</span>')
+            f'margin-right:5px;white-space:nowrap">{_esc(text)}</span>')
 
 
 def _render_card(item: dict) -> str:
@@ -526,110 +716,235 @@ def _render_card(item: dict) -> str:
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
 
-    snips = (item.get("evidence_lt") or [])[:3]
-    ev_html = "".join(
-        f'<div style="margin:3px 0">"{_esc(s)}"</div>' for s in snips
+    snips = (item.get("evidence_lt") or [])[:5]
+    ev_items = "".join(
+        f'<div style="margin:3px 0">• "{_esc(s)}"</div>' for s in snips
     )
 
     public = item.get("public_tickers") or []
-    private = item.get("private_or_unknown") or []
-    tickers_str = (", ".join(
-        f'{_esc(p["ticker"])} <span style="color:#8c959f">({_esc(p["exchange"])})</span>'
+    priv = item.get("companies_private") or []
+    unclear = item.get("tickers_unclear") or []
+    proxies = item.get("ticker_proxies") or []
+
+    tickers_verified = (", ".join(
+        f'<strong>{_esc(p["ticker"])}</strong> '
+        f'<span style="color:#8c959f">({_esc(p["exchange"])})</span>'
         for p in public
     ) if public else "—")
 
-    fund = (item.get("signal_fundamental") or "neutral").lower()
-    react = (item.get("signal_market_reaction") or "neutral").lower()
-    signal_html = (_badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
-                   + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#57606a")))
+    fund = (item.get("signal_fundamental") or "unclear").lower()
+    react = (item.get("signal_market_reaction") or "unknown").lower()
+    trade = (item.get("tradability") or "watch-only").lower()
 
     key_numbers = item.get("key_numbers") or []
     monitor = item.get("monitor") or []
+
+    kn_html = ""
+    if key_numbers:
+        kn_html = ('<div style="margin:0 0 9px;font-size:13px;line-height:1.5">'
+                   '<strong>🔢 Key numbers:</strong><ul style="margin:4px 0 0;padding-left:18px">'
+                   + "".join(f'<li style="margin:2px 0">{_esc(n)}</li>' for n in key_numbers)
+                   + '</ul></div>')
 
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
         f'margin:0 0 16px;font-family:{_F};max-width:680px">'
 
-        # --- header with dashed divider ---
+        # header
         f'<div style="border-bottom:1px dashed #444c56;padding-bottom:12px;margin-bottom:14px">'
         f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
         f'letter-spacing:.5px;margin-bottom:6px">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
         f'<div style="margin:0 0 10px;font-size:15px;font-weight:600;line-height:1.35">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
         + (f'<div style="padding:8px 12px;border-left:3px solid #444c56;'
-           f'color:#8c959f;font-size:13px;font-style:italic">{ev_html}</div>'
-           if ev_html else '')
+           f'color:#8c959f;font-size:13px;font-style:italic">{ev_items}</div>'
+           if ev_items else '')
         + '</div>'
 
-        # --- body rows ---
+        # body
         + _row("🧭", "What happened", _esc(item.get("what_happened_en") or ""))
-        + (_row("🔢", "Key numbers", _join(key_numbers)) if key_numbers else "")
+        + kn_html
         + _row("🎯", "Direct", _join(item.get("affected_direct")))
         + _row("🔗", "Indirect", _join(item.get("affected_indirect")))
-        + _row("📊", "Tickers", tickers_str)
-        + (_row("🏷", "Private/unclear", _join(private)) if private else "")
-        + f'<div style="margin:0 0 9px;font-size:13px">'
-          f'<strong>📈 Signal:</strong> {signal_html}</div>'
+        + _row("📊", "Tickers verified", tickers_verified)
+        + (_row("🏢", "Private companies", _join(priv)) if priv else "")
+        + (_row("❓", "Ticker unclear", _join(unclear)) if unclear else "")
+        + (_row("🔭", "Possible proxies", _join(proxies)) if proxies else "")
+        + f'<div style="margin:0 0 9px;font-size:13px;line-height:1.8">'
+          f'<strong>📈 Signal:</strong> '
+          + _badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
+          + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#8c959f"))
+          + _badge(f"Tradability: {trade}", _TRADE_COLORS.get(trade, "#57606a"))
+          + '</div>'
         + _row("💡", "Investor meaning", _esc(item.get("investor_meaning_en") or ""))
         + (_row("👁", "Monitor", _join(monitor)) if monitor else "")
         + '</div>'
     )
 
 
-def _brief_bullets(validated: list[dict], n: int = 5) -> list[str]:
-    def sort_key(x):
-        rank = _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3)
-        baltic = 0 if x.get("is_baltic") else 1
-        return (rank, baltic)
-    top = sorted(validated, key=sort_key)[:n]
-    out = []
-    for it in top:
-        meaning = (it.get("investor_meaning_en") or it.get("what_happened_en") or "").strip()
-        if len(meaning) > 160:
-            meaning = meaning[:157].rstrip() + "…"
-        headline = (it.get("headline_en") or "").strip()
-        out.append(f"<strong>{_esc(headline)}.</strong> {_esc(meaning)}")
-    return out
+def _render_watchlist_row(item: dict) -> str:
+    """Compact single-row card for section D (Watchlist)."""
+    importance = (item.get("importance") or "medium").upper()
+    headline = _esc(item.get("headline_en") or "")
+    url = _esc(item.get("url") or "")
+    a_type = _esc((item.get("article_type") or "").replace("_", " "))
+    what = _esc(item.get("what_happened_en") or "")
+    fund = (item.get("signal_fundamental") or "neutral").lower()
+    trade = (item.get("tradability") or "watch-only").lower()
+    color = _FUND_COLORS.get(fund, "#57606a")
+    return (
+        f'<div style="border-left:3px solid #444c56;padding:8px 12px;'
+        f'margin:0 0 10px;font-family:{_F}">'
+        f'<div style="font-size:11px;color:#8c959f;margin-bottom:3px">'
+        f'{importance} · {_esc(a_type)}</div>'
+        f'<div style="font-size:14px;font-weight:600;margin-bottom:4px">'
+        f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
+        f'<div style="font-size:13px;color:#cdd0d4">{what}</div>'
+        f'<div style="margin-top:5px">'
+        + _badge(fund, color)
+        + _badge(trade, _TRADE_COLORS.get(trade, "#57606a"))
+        + '</div></div>'
+    )
 
 
-def render_html(validated: list[dict], today: dt.date) -> str:
+def _render_liveblog_row(item: dict) -> str:
+    headline = _esc(item.get("headline_en") or "")
+    url = _esc(item.get("url") or "")
+    what = _esc(item.get("what_happened_en") or "")
+    return (
+        f'<div style="padding:6px 0;border-bottom:1px solid #30363d;font-family:{_F}">'
+        f'<a href="{url}" style="color:#4493f8;text-decoration:none;font-size:13px;'
+        f'font-weight:600">{headline}</a>'
+        + (f' <span style="font-size:12px;color:#8c959f">— {what}</span>' if what else '')
+        + '</div>'
+    )
+
+
+def _render_tickers_table(main: list[dict]) -> str:
+    rows = []
+    seen: set[str] = set()
+    for item in main:
+        for p in (item.get("public_tickers") or []):
+            t = p.get("ticker", "")
+            if t in seen:
+                continue
+            seen.add(t)
+            fund = (item.get("signal_fundamental") or "unclear").lower()
+            react = (item.get("signal_market_reaction") or "unknown").lower()
+            rows.append(
+                f'<tr style="border-bottom:1px solid #30363d">'
+                f'<td style="padding:6px 8px;font-weight:600;white-space:nowrap">{_esc(t)}</td>'
+                f'<td style="padding:6px 8px;color:#8c959f;font-size:12px">{_esc(p.get("exchange",""))}</td>'
+                f'<td style="padding:6px 8px;font-size:13px">'
+                f'<a href="{_esc(item.get("url",""))}" style="color:#4493f8;text-decoration:none">'
+                f'{_esc(item.get("headline_en",""))}</a></td>'
+                f'<td style="padding:6px 8px">{_badge(fund, _FUND_COLORS.get(fund,"#57606a"))}</td>'
+                f'<td style="padding:6px 8px">{_badge(react, _REACT_COLORS.get(react,"#8c959f"))}</td>'
+                f'</tr>'
+            )
+    if not rows:
+        return ""
+    header = (
+        '<tr style="border-bottom:1px solid #444c56">'
+        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">TICKER</th>'
+        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">EXCHANGE</th>'
+        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">EVENT</th>'
+        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">FUNDAMENTAL</th>'
+        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">MARKET</th>'
+        '</tr>'
+    )
+    return (
+        f'<table style="width:100%;border-collapse:collapse;font-family:{_F};'
+        f'font-size:13px;max-width:680px">'
+        + header + "".join(rows) + '</table>'
+    )
+
+
+def render_html(result: dict, today: dt.date) -> str:
+    main: list[dict] = result.get("main") or []
+    liveblogs: list[dict] = result.get("liveblogs") or []
+    skipped: list[dict] = result.get("skipped") or []
+
     wrap = f'font-family:{_F};max-width:720px;font-size:14px;line-height:1.5'
-    if not validated:
+    if not main and not liveblogs:
         return f'<div style="{wrap}"><p>No new investing-relevant VŽ articles in this period.</p></div>'
 
-    cards = sorted(
-        validated,
-        key=lambda x: (
-            _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3),
-            0 if x.get("is_baltic") else 1,
-        ),
-    )
-    bullets = _brief_bullets(validated, n=min(5, len(validated)))
-
-    h2 = (f'font-family:{_F};font-size:13px;color:#8c959f;text-transform:uppercase;'
-          f'letter-spacing:.6px;margin:28px 0 12px;font-weight:600')
+    h2s = (f'font-family:{_F};font-size:13px;color:#8c959f;text-transform:uppercase;'
+           f'letter-spacing:.6px;margin:32px 0 12px;font-weight:600;'
+           f'border-bottom:1px solid #30363d;padding-bottom:6px')
 
     parts = [
         f'<div style="{wrap}">',
-        f'<div style="font-size:12px;color:#8c959f;margin-bottom:16px;font-family:{_F}">'
-        f'Investment Brief · {today.isoformat()} · {len(validated)} signals</div>',
+        f'<div style="font-size:12px;color:#8c959f;margin-bottom:20px;font-family:{_F}">'
+        f'Investment Brief · {today.isoformat()} · {len(main)} signals</div>',
     ]
 
+    # ── A · Executive Brief ───────────────────────────────────────────
+    bullets = []
+    for item in main[:5]:
+        b = (item.get("brief_bullet") or "").strip()
+        if not b:
+            # Fallback: use what_happened_en, truncated cleanly at word boundary
+            fallback = (item.get("what_happened_en") or item.get("headline_en") or "").strip()
+            words = fallback.split()[:22]
+            b = " ".join(words)
+            if not b.endswith("."):
+                b = b.rstrip(",;") + "."
+        bullets.append(b)
+
     if bullets:
-        parts.append(f'<h2 style="{h2}">A · Executive Brief</h2>')
+        parts.append(f'<h2 style="{h2s}">A · Executive Brief</h2>')
         parts.append(
             f'<div style="border:1px solid #444c56;border-left:4px solid #4493f8;'
             f'border-radius:8px;padding:14px 18px;margin:0 0 20px;font-family:{_F}">'
             f'<ul style="margin:0;padding-left:20px">'
         )
         parts.extend(
-            f'<li style="margin:8px 0;font-size:14px;line-height:1.5">{b}</li>'
+            f'<li style="margin:9px 0;font-size:14px;line-height:1.5">{_esc(b)}</li>'
             for b in bullets
         )
         parts.append('</ul></div>')
 
-    parts.append(f'<h2 style="{h2}">B · Top Signals</h2>')
-    parts.extend(_render_card(c) for c in cards)
+    # ── B · Top Signals ───────────────────────────────────────────────
+    top_signals = [i for i in main if (i.get("importance") or "").lower() in ("high", "medium")]
+    if top_signals:
+        parts.append(f'<h2 style="{h2s}">B · Top Signals</h2>')
+        parts.extend(_render_card(c) for c in top_signals)
+
+    # ── C · Direct Public Tickers ─────────────────────────────────────
+    ticker_table = _render_tickers_table(main)
+    if ticker_table:
+        parts.append(f'<h2 style="{h2s}">C · Direct Public Tickers</h2>')
+        parts.append(ticker_table)
+
+    # ── D · Macro / Sector / Private Watchlist ────────────────────────
+    watchlist = [i for i in main if (i.get("importance") or "").lower() == "low"]
+    if watchlist:
+        parts.append(f'<h2 style="{h2s}">D · Macro / Sector / Private Watchlist</h2>')
+        parts.extend(_render_watchlist_row(i) for i in watchlist)
+
+    # ── E · Liveblog / Dienos pulsas ─────────────────────────────────
+    market_lb = [i for i in liveblogs if (i.get("importance") or "low").lower() != "low"]
+    if market_lb:
+        parts.append(f'<h2 style="{h2s}">E · Liveblog / Dienos pulsas</h2>')
+        parts.append(f'<div style="font-family:{_F}">')
+        parts.extend(_render_liveblog_row(i) for i in market_lb)
+        parts.append('</div>')
+
+    # ── F · Skipped / Low Relevance ───────────────────────────────────
+    if skipped:
+        parts.append(f'<h2 style="{h2s}">F · Skipped / Low Relevance</h2>')
+        parts.append(
+            f'<div style="font-family:{_F};font-size:12px;color:#8c959f;'
+            f'padding:10px 14px;border:1px solid #30363d;border-radius:6px">'
+        )
+        for s in skipped:
+            parts.append(
+                f'<div style="margin:3px 0">— <em>{_esc(s.get("headline_en","—"))}</em>'
+                f' · {_esc(s.get("reason",""))}</div>'
+            )
+        parts.append('</div>')
+
     parts.append('</div>')
     return "".join(parts)
 
@@ -756,12 +1071,16 @@ def run() -> None:
         return
 
     extracted = gemini_extract(fetched)
-    validated = validate(extracted, fetched)
-    print(f"Extracted {len(extracted.get('items', []))} | Validated {len(validated)}")
+    result = validate(extracted, fetched)
+    n_main = len(result["main"])
+    n_lb = len(result["liveblogs"])
+    n_skip = len(result["skipped"])
+    print(f"Extracted {len(extracted.get('items', []))} | "
+          f"Main {n_main} | Liveblogs {n_lb} | Skipped {n_skip}")
 
-    html = render_html(validated, now.date())
+    html = render_html(result, now.date())
     send_email(
-        f"VŽ summary {now.date().isoformat()} — {len(validated)} items",
+        f"VŽ summary {now.date().isoformat()} — {n_main} signals",
         html + DISCLAIMER_HTML,
     )
     save_last_run(now)
