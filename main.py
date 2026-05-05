@@ -104,6 +104,12 @@ TICKER_MAP: dict[str, dict] = {
     "coca-cola": {"ticker": "KO", "exchange": "NYSE", "country": "US", "cap": "mega"},
     "pfizer": {"ticker": "PFE", "exchange": "NYSE", "country": "US", "cap": "large"},
     "moderna": {"ticker": "MRNA", "exchange": "Nasdaq", "country": "US", "cap": "mid"},
+    "micron": {"ticker": "MU", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "pinterest": {"ticker": "PINS", "exchange": "NYSE", "country": "US", "cap": "mid"},
+    "conocophillips": {"ticker": "COP", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "conoco": {"ticker": "COP", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "ebay": {"ticker": "EBAY", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "gamestop": {"ticker": "GME", "exchange": "NYSE", "country": "US", "cap": "small"},
     "openai": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
     "spacex": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
     "stripe": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
@@ -117,7 +123,7 @@ TICKER_MAP: dict[str, dict] = {
     "bmw": {"ticker": "BMW", "exchange": "Xetra", "country": "DE", "cap": "large"},
     "mercedes-benz": {"ticker": "MBG", "exchange": "Xetra", "country": "DE", "cap": "large"},
     "deutsche bank": {"ticker": "DBK", "exchange": "Xetra", "country": "DE", "cap": "large"},
-    "ing": {"ticker": "INGA", "exchange": "Euronext Amsterdam", "country": "NL", "cap": "large"},
+    "ing groep": {"ticker": "INGA", "exchange": "Euronext Amsterdam", "country": "NL", "cap": "large"},
     "swedbank": {"ticker": "SWED-A", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
     "seb": {"ticker": "SEB-A", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
     "nordea": {"ticker": "NDA-FI", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
@@ -418,7 +424,15 @@ GOOD: "Norway resumes gas field production, adding ~2 bcm/year to Europe's suppl
 BAD:  "Norway resumes exploitation of several fields, boosting gas supply to Europe..."
 
 ═══════════════════════════════════════════
-STEP 10 — TRADABILITY:
+STEP 10 — CONFIDENCE:
+high   = hard data from the article (earnings, official figures, signed agreements)
+medium = analysis, estimates, unnamed sources, preliminary/proposed changes
+low    = speculation, opinion, historical analogy, vague statements
+Not everything is HIGH. Opinion pieces, historical comparisons, and speculative
+macro commentary must be CONF:LOW or CONF:MEDIUM.
+
+═══════════════════════════════════════════════
+STEP 11 — TRADABILITY:
 direct     = listed company directly affected; can be traded now
 indirect   = sector/macro effect; tradable via ETF or proxy
 watch-only = private, state-owned, or no clear near-term tradable instrument
@@ -492,7 +506,11 @@ def normalize_text(s: str) -> str:
 _DROP_TYPES = {"low_relevance", "sponsored_or_ad"}
 _IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
 _MAX_HIGH = 5       # max cards allowed at HIGH importance
-_MAX_MAIN = 8       # max non-liveblog cards in Top Signals
+_MAX_MAIN = 8       # max non-liveblog cards total (Top Signals + Watchlist)
+_MAX_TOP = 5        # max cards in Top Signals (B); rest go to Watchlist (D)
+
+# These article types should never be HIGH importance and cap confidence at medium.
+_OPINION_TYPES = {"educational", "personal_finance", "market_overview"}
 
 
 def _lookup_ticker(name: str) -> dict | None:
@@ -502,7 +520,9 @@ def _lookup_ticker(name: str) -> dict | None:
     if n in TICKER_MAP:
         return TICKER_MAP[n]
     for key, info in TICKER_MAP.items():
-        if key in n or n in key:
+        # Require key length ≥5 for substring matching to avoid false positives
+        # (e.g. "ing" matching "banking", "trading", "investing").
+        if len(key) >= 5 and (key in n or n in key):
             return info
     return None
 
@@ -558,13 +578,14 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
 
         body_norm = normalize_text(a["body"])
 
-        # Evidence validation
+        # Evidence validation — enforce ≤12-word cap and body presence
         snippets = [s for s in (item.get("evidence_lt") or []) if s]
-        valid_snips = [s for s in snippets if normalize_text(s) in body_norm]
+        trimmed = [" ".join(s.split()[:12]) for s in snippets]
+        valid_snips = [s for s in trimmed if normalize_text(s) in body_norm]
         if len(valid_snips) < 2 and not item.get("is_liveblog"):
             _skip(item, "fewer than 2 evidence snippets verified in body")
             continue
-        item["evidence_lt"] = valid_snips[:7]
+        item["evidence_lt"] = valid_snips[:5]  # prefer 3–5, cap at 5
 
         # Key-number cross-article contamination check
         clean_nums = [
@@ -597,6 +618,14 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         item["companies_private"] = companies_private
         item["tickers_unclear"] = tickers_unclear
         item["is_baltic"] = any(p.get("country") in _BALTIC_COUNTRIES for p in public)
+
+        # Opinion/speculative types: cap importance at medium, confidence at medium
+        if a_type in _OPINION_TYPES:
+            if (item.get("importance") or "low").lower() == "high":
+                item["importance"] = "medium"
+                print(f"  demoted to medium (opinion type): {item.get('headline_en')}")
+            if (item.get("confidence") or "low").lower() == "high":
+                item["confidence"] = "medium"
 
         # Ensure brief_bullet has no ellipsis (patch if Gemini violated the rule)
         bullet = (item.get("brief_bullet") or "").strip()
@@ -645,7 +674,7 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
             else:
                 _skip(item, "theme-dedup: merged into richer card")
 
-    # ── Pass 4: split liveblogs / main; enforce HIGH cap ────────────
+    # ── Pass 4: split liveblogs / main; enforce caps ─────────────────
     liveblogs = [i for i in final_passed if i.get("is_liveblog")]
     main_candidates = [i for i in final_passed if not i.get("is_liveblog")]
 
@@ -654,7 +683,7 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         0 if x.get("is_baltic") else 1,
     ))
 
-    # Cap HIGH labels
+    # Cap HIGH labels at _MAX_HIGH
     high_count = 0
     for item in main_candidates:
         if (item.get("importance") or "low").lower() == "high":
@@ -663,12 +692,42 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
                 item["importance"] = "medium"
                 print(f"  demoted to medium (HIGH cap): {item.get('headline_en')}")
 
-    # Cap total main cards
-    main = main_candidates[:_MAX_MAIN]
-    for item in main_candidates[_MAX_MAIN:]:
-        _skip(item, "card cap: beyond max 8 main signals")
+    # Split into top_signals (HIGH → section B) and watchlist (MEDIUM → section D)
+    top_signals: list[dict] = []
+    watchlist: list[dict] = []
+    low_items: list[dict] = []
+    for item in main_candidates:
+        imp = (item.get("importance") or "low").lower()
+        if imp == "high":
+            top_signals.append(item)
+        elif imp == "medium":
+            watchlist.append(item)
+        else:
+            low_items.append(item)
 
-    return {"main": main, "liveblogs": liveblogs, "skipped": skipped}
+    # Demote low items to skipped
+    for item in low_items:
+        _skip(item, "low importance — demoted to skipped")
+
+    # Cap top signals at _MAX_TOP; overflow goes to watchlist
+    if len(top_signals) > _MAX_TOP:
+        for item in top_signals[_MAX_TOP:]:
+            item["importance"] = "medium"
+            watchlist.append(item)
+        top_signals = top_signals[:_MAX_TOP]
+
+    # Cap total main to _MAX_MAIN
+    all_main = top_signals + watchlist
+    for item in all_main[_MAX_MAIN:]:
+        _skip(item, "card cap: beyond max 8 signals")
+    all_main = all_main[:_MAX_MAIN]
+
+    return {
+        "top_signals": top_signals,
+        "watchlist": watchlist[:_MAX_MAIN - len(top_signals)],
+        "liveblogs": liveblogs,
+        "skipped": skipped,
+    }
 
 
 _FUND_COLORS = {
@@ -820,37 +879,45 @@ def _render_liveblog_row(item: dict) -> str:
     )
 
 
-def _render_tickers_table(main: list[dict]) -> str:
+def _render_tickers_table(items: list[dict]) -> str:
+    """One row per verified ticker from direct_public_company cards only."""
     rows = []
     seen: set[str] = set()
-    for item in main:
+    for item in items:
+        # Only directly-named company articles belong in this table
+        if (item.get("article_type") or "") != "direct_public_company":
+            continue
+        fund = (item.get("signal_fundamental") or "unclear").lower()
+        react = (item.get("signal_market_reaction") or "unknown").lower()
+        url = _esc(item.get("url") or "")
+        what = _esc((item.get("what_happened_en") or "")[:120])
         for p in (item.get("public_tickers") or []):
             t = p.get("ticker", "")
-            if t in seen:
+            if not t or t in seen:
                 continue
             seen.add(t)
-            fund = (item.get("signal_fundamental") or "unclear").lower()
-            react = (item.get("signal_market_reaction") or "unknown").lower()
             rows.append(
                 f'<tr style="border-bottom:1px solid #30363d">'
-                f'<td style="padding:6px 8px;font-weight:600;white-space:nowrap">{_esc(t)}</td>'
-                f'<td style="padding:6px 8px;color:#8c959f;font-size:12px">{_esc(p.get("exchange",""))}</td>'
-                f'<td style="padding:6px 8px;font-size:13px">'
-                f'<a href="{_esc(item.get("url",""))}" style="color:#4493f8;text-decoration:none">'
-                f'{_esc(item.get("headline_en",""))}</a></td>'
-                f'<td style="padding:6px 8px">{_badge(fund, _FUND_COLORS.get(fund,"#57606a"))}</td>'
-                f'<td style="padding:6px 8px">{_badge(react, _REACT_COLORS.get(react,"#8c959f"))}</td>'
+                f'<td style="padding:7px 8px;font-weight:700;white-space:nowrap;color:#4493f8">'
+                f'<a href="{url}" style="color:#4493f8;text-decoration:none">{_esc(t)}</a></td>'
+                f'<td style="padding:7px 8px;color:#8c959f;font-size:12px;white-space:nowrap">'
+                f'{_esc(p.get("exchange",""))}</td>'
+                f'<td style="padding:7px 8px;font-size:13px;color:#cdd0d4">{what}</td>'
+                f'<td style="padding:7px 8px;white-space:nowrap">'
+                f'{_badge(fund, _FUND_COLORS.get(fund,"#57606a"))}</td>'
+                f'<td style="padding:7px 8px;white-space:nowrap">'
+                f'{_badge(react, _REACT_COLORS.get(react,"#8c959f"))}</td>'
                 f'</tr>'
             )
     if not rows:
         return ""
     header = (
         '<tr style="border-bottom:1px solid #444c56">'
-        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">TICKER</th>'
-        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">EXCHANGE</th>'
-        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">EVENT</th>'
-        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">FUNDAMENTAL</th>'
-        '<th style="padding:6px 8px;text-align:left;font-size:11px;color:#8c959f">MARKET</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">TICKER</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">EXCHANGE</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">EVENT</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">FUNDAMENTAL</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">MARKET</th>'
         '</tr>'
     )
     return (
@@ -861,12 +928,14 @@ def _render_tickers_table(main: list[dict]) -> str:
 
 
 def render_html(result: dict, today: dt.date) -> str:
-    main: list[dict] = result.get("main") or []
+    top_signals: list[dict] = result.get("top_signals") or []
+    watchlist: list[dict] = result.get("watchlist") or []
     liveblogs: list[dict] = result.get("liveblogs") or []
     skipped: list[dict] = result.get("skipped") or []
+    all_main = top_signals + watchlist
 
     wrap = f'font-family:{_F};max-width:720px;font-size:14px;line-height:1.5'
-    if not main and not liveblogs:
+    if not all_main and not liveblogs:
         return f'<div style="{wrap}"><p>No new investing-relevant VŽ articles in this period.</p></div>'
 
     h2s = (f'font-family:{_F};font-size:13px;color:#8c959f;text-transform:uppercase;'
@@ -876,12 +945,13 @@ def render_html(result: dict, today: dt.date) -> str:
     parts = [
         f'<div style="{wrap}">',
         f'<div style="font-size:12px;color:#8c959f;margin-bottom:20px;font-family:{_F}">'
-        f'Investment Brief · {today.isoformat()} · {len(main)} signals</div>',
+        f'Investment Brief · {today.isoformat()} · {len(top_signals)} signals · '
+        f'{len(watchlist)} watchlist</div>',
     ]
 
     # ── A · Executive Brief ───────────────────────────────────────────
     bullets = []
-    for item in main[:5]:
+    for item in top_signals[:5]:
         b = (item.get("brief_bullet") or "").strip()
         if not b:
             # Fallback: use what_happened_en, truncated cleanly at word boundary
@@ -906,19 +976,17 @@ def render_html(result: dict, today: dt.date) -> str:
         parts.append('</ul></div>')
 
     # ── B · Top Signals ───────────────────────────────────────────────
-    top_signals = [i for i in main if (i.get("importance") or "").lower() in ("high", "medium")]
     if top_signals:
         parts.append(f'<h2 style="{h2s}">B · Top Signals</h2>')
         parts.extend(_render_card(c) for c in top_signals)
 
     # ── C · Direct Public Tickers ─────────────────────────────────────
-    ticker_table = _render_tickers_table(main)
+    ticker_table = _render_tickers_table(top_signals + watchlist)
     if ticker_table:
         parts.append(f'<h2 style="{h2s}">C · Direct Public Tickers</h2>')
         parts.append(ticker_table)
 
     # ── D · Macro / Sector / Private Watchlist ────────────────────────
-    watchlist = [i for i in main if (i.get("importance") or "").lower() == "low"]
     if watchlist:
         parts.append(f'<h2 style="{h2s}">D · Macro / Sector / Private Watchlist</h2>')
         parts.extend(_render_watchlist_row(i) for i in watchlist)
@@ -1072,15 +1140,16 @@ def run() -> None:
 
     extracted = gemini_extract(fetched)
     result = validate(extracted, fetched)
-    n_main = len(result["main"])
+    n_top = len(result["top_signals"])
+    n_watch = len(result["watchlist"])
     n_lb = len(result["liveblogs"])
     n_skip = len(result["skipped"])
     print(f"Extracted {len(extracted.get('items', []))} | "
-          f"Main {n_main} | Liveblogs {n_lb} | Skipped {n_skip}")
+          f"Top {n_top} | Watchlist {n_watch} | Liveblogs {n_lb} | Skipped {n_skip}")
 
     html = render_html(result, now.date())
     send_email(
-        f"VŽ summary {now.date().isoformat()} — {n_main} signals",
+        f"VŽ summary {now.date().isoformat()} — {n_top} signals · {n_watch} watchlist",
         html + DISCLAIMER_HTML,
     )
     save_last_run(now)
