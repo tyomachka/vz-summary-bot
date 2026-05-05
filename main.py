@@ -292,39 +292,74 @@ def validate(extracted: dict, articles: list[dict]) -> list[dict]:
     return valid
 
 
-RENDER_PROMPT = """Render this validated JSON as a single HTML fragment for Gmail. No <html>/<body>, no code fences. HTML only.
-
-Layout rules:
-- Header at top: <div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:680px;font-size:12px;color:#57606a;margin-bottom:12px">{date} • {N} items</div>
-- Two sections: 📊 Tickered (items with non-empty "tickers") and 🌍 Macro & Other. Sort each by importance: high → medium → low. Omit a section heading if empty.
-- Section heading: <h2 style="font-size:14px;color:#57606a;text-transform:uppercase;letter-spacing:0.5px;margin:20px 0 10px">📊 Tickered</h2> (or 🌍 Macro & Other)
-- Direction badge colors: bullish=#1a7f37, bearish=#cf222e, neutral=#57606a, mixed=#9a6700.
-- If items array is empty: <p style="font-family:-apple-system,Segoe UI,sans-serif;max-width:680px">No new investing-relevant VŽ articles in this period.</p>
-- DO NOT add a disclaimer (added downstream).
-
-Per-card template (substitute fields literally):
-<div style="border:1px solid #d0d7de;border-radius:8px;padding:14px 16px;margin:0 0 16px;font-family:-apple-system,Segoe UI,sans-serif;max-width:680px;color:#1f2328">
-  <div style="border-bottom:1px dashed #d0d7de;padding-bottom:10px;margin-bottom:10px">
-    <div style="font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">📰 {CATEGORY} · {IMPORTANCE}</div>
-    <h3 style="margin:0 0 6px;font-size:15px"><a href="{URL}" style="color:#0969da;text-decoration:none">{HEADLINE_EN}</a></h3>
-    <blockquote style="margin:0;padding:6px 12px;border-left:3px solid #d0d7de;color:#57606a;font-size:13px">"{SOURCE_QUOTE_LT}"</blockquote>
-  </div>
-  <div style="font-size:13px">
-    <p style="margin:0 0 6px"><strong>📊 Tickers:</strong> {TICKERS_COMMA_SEPARATED or "—"}</p>
-    <p style="margin:0 0 6px"><strong>📈 Direction:</strong> <span style="background:{COLOR};color:#fff;padding:1px 8px;border-radius:4px;font-weight:600;font-size:12px">{DIRECTION}</span></p>
-    <p style="margin:0 0 6px"><strong>⚡ Catalyst:</strong> {CATALYST}</p>
-    <p style="margin:0"><strong>💡 Takeaway:</strong> {INVESTOR_TAKEAWAY}</p>
-  </div>
-</div>
-
-VALIDATED JSON:
-"""
+_DIRECTION_COLORS = {
+    "bullish": "#1a7f37",
+    "bearish": "#cf222e",
+    "neutral": "#57606a",
+    "mixed": "#9a6700",
+}
+_IMPORTANCE_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 
-def gemini_render(validated: list[dict], today: dt.date) -> str:
-    payload = json.dumps({"date": today.isoformat(), "items": validated}, ensure_ascii=False)
-    raw = gemini_call(RENDER_PROMPT + payload, max_tokens=16384, temperature=0.2)
-    return strip_fences(raw)
+def _esc(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _render_card(item: dict) -> str:
+    direction = (item.get("direction") or "neutral").lower()
+    color = _DIRECTION_COLORS.get(direction, "#57606a")
+    tickers = item.get("tickers") or []
+    tickers_str = ", ".join(_esc(t) for t in tickers) if tickers else "—"
+    return (
+        '<div style="border:1px solid #d0d7de;border-radius:8px;padding:14px 16px;'
+        'margin:0 0 16px;font-family:-apple-system,Segoe UI,sans-serif;max-width:680px;color:#1f2328">'
+        '<div style="border-bottom:1px dashed #d0d7de;padding-bottom:10px;margin-bottom:10px">'
+        '<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
+        f'letter-spacing:0.5px;margin-bottom:4px">📰 {_esc(item.get("category", ""))} · '
+        f'{_esc(item.get("importance", ""))}</div>'
+        f'<h3 style="margin:0 0 6px;font-size:15px"><a href="{_esc(item.get("url", ""))}" '
+        f'style="color:#0969da;text-decoration:none">{_esc(item.get("headline_en", ""))}</a></h3>'
+        '<blockquote style="margin:0;padding:6px 12px;border-left:3px solid #d0d7de;'
+        f'color:#57606a;font-size:13px">"{_esc(item.get("source_quote_lt", ""))}"</blockquote>'
+        '</div>'
+        '<div style="font-size:13px">'
+        f'<p style="margin:0 0 6px"><strong>📊 Tickers:</strong> {tickers_str}</p>'
+        '<p style="margin:0 0 6px"><strong>📈 Direction:</strong> '
+        f'<span style="background:{color};color:#fff;padding:1px 8px;border-radius:4px;'
+        f'font-weight:600;font-size:12px">{_esc(direction.capitalize())}</span></p>'
+        f'<p style="margin:0 0 6px"><strong>⚡ Catalyst:</strong> {_esc(item.get("catalyst", ""))}</p>'
+        f'<p style="margin:0"><strong>💡 Takeaway:</strong> {_esc(item.get("investor_takeaway", ""))}</p>'
+        '</div>'
+        '</div>'
+    )
+
+
+def render_html(validated: list[dict], today: dt.date) -> str:
+    if not validated:
+        return ('<p style="font-family:-apple-system,Segoe UI,sans-serif;max-width:680px">'
+                'No new investing-relevant VŽ articles in this period.</p>')
+
+    tickered = [x for x in validated if x.get("tickers")]
+    macro = [x for x in validated if not x.get("tickers")]
+    sort_key = lambda x: _IMPORTANCE_ORDER.get((x.get("importance") or "low").lower(), 3)
+    tickered.sort(key=sort_key)
+    macro.sort(key=sort_key)
+
+    parts = [
+        '<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:680px;'
+        f'font-size:12px;color:#57606a;margin-bottom:12px">{today.isoformat()} • '
+        f'{len(validated)} items</div>'
+    ]
+    if tickered:
+        parts.append('<h2 style="font-size:14px;color:#57606a;text-transform:uppercase;'
+                     'letter-spacing:0.5px;margin:20px 0 10px">📊 Tickered</h2>')
+        parts.extend(_render_card(x) for x in tickered)
+    if macro:
+        parts.append('<h2 style="font-size:14px;color:#57606a;text-transform:uppercase;'
+                     'letter-spacing:0.5px;margin:20px 0 10px">🌍 Macro &amp; Other</h2>')
+        parts.extend(_render_card(x) for x in macro)
+    return "".join(parts)
 
 
 # Login + scrape
@@ -454,7 +489,7 @@ def run() -> None:
     validated = validate(extracted, fetched)
     print(f"Extracted {len(extracted.get('items', []))} | Validated {len(validated)}")
 
-    html = gemini_render(validated, now.date())
+    html = render_html(validated, now.date())
     send_email(
         f"VŽ summary {now.date().isoformat()} — {len(validated)} items",
         html + DISCLAIMER_HTML,
