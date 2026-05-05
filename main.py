@@ -491,22 +491,25 @@ _REACT_COLORS = {
 }
 
 _EMAIL_STYLE = """<style>
-.vz-wrap{font-family:-apple-system,Segoe UI,sans-serif;max-width:720px;color:#1f2328;font-size:14px;line-height:1.45}
-.vz-meta{font-size:12px;color:#57606a;margin-bottom:14px}
-.vz-h2{font-size:14px;color:#57606a;text-transform:uppercase;letter-spacing:.5px;margin:22px 0 10px}
-.vz-brief{padding:10px 14px;background:#f6f8fa;border-left:3px solid #0969da;border-radius:4px;margin:0 0 18px}
-.vz-brief ul{margin:0;padding-left:18px}
-.vz-brief li{margin:4px 0}
-.vz-card{border:1px solid #d0d7de;border-radius:6px;padding:12px 14px;margin:0 0 14px}
-.vz-tag{display:inline-block;font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.vz-wrap{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;font-size:14px;line-height:1.5}
+.vz-meta{font-size:12px;color:#8c959f;margin-bottom:14px;letter-spacing:.3px}
+.vz-h2{font-size:14px;color:#8c959f;text-transform:uppercase;letter-spacing:.6px;margin:24px 0 12px;font-weight:600}
+.vz-brief{border:1px solid #d0d7de;border-left:4px solid #0969da;border-radius:8px;padding:14px 18px;margin:0 0 20px}
+.vz-brief ul{margin:0;padding-left:20px}
+.vz-brief li{margin:8px 0;line-height:1.5}
+.vz-card{border:1px solid #d0d7de;border-radius:8px;padding:16px 18px;margin:0 0 16px;max-width:680px}
+.vz-head{border-bottom:1px dashed #d0d7de;padding-bottom:12px;margin-bottom:12px}
+.vz-tag{font-size:11px;color:#8c959f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .vz-tag .lb{color:#cf222e;font-weight:600}
-.vz-h3{margin:0 0 6px;font-size:14px;font-weight:600}
+.vz-h3{margin:0 0 8px;font-size:15px;line-height:1.35;font-weight:600}
 .vz-h3 a{color:#0969da;text-decoration:none}
-.vz-ev{margin:6px 0;padding:6px 10px;border-left:3px solid #d0d7de;color:#57606a;font-size:12px}
-.vz-ev span{display:block;margin:1px 0}
-.vz-row{margin:4px 0;font-size:13px}
-.vz-row b{color:#57606a;font-weight:600;margin-right:4px}
-.vz-badge{display:inline-block;color:#fff;padding:1px 7px;border-radius:3px;font-weight:600;font-size:11px;margin-right:6px}
+.vz-ev{margin:0;padding:8px 12px;border-left:3px solid #d0d7de;color:#8c959f;font-size:13px;font-style:italic}
+.vz-ev div{margin:2px 0}
+.vz-row{margin:0 0 8px;font-size:13px;line-height:1.5}
+.vz-row:last-child{margin-bottom:0}
+.vz-row b{font-weight:600;margin-right:4px}
+.vz-badge{display:inline-block;color:#fff;padding:2px 9px;border-radius:4px;font-weight:600;font-size:12px;margin-right:6px;white-space:nowrap}
+.vz-sub{color:#8c959f;font-weight:400}
 </style>"""
 
 
@@ -529,13 +532,13 @@ def _render_card(item: dict) -> str:
     url = _esc(item.get("url") or "")
 
     snips = (item.get("evidence_lt") or [])[:3]
-    ev_html = "".join(f'<span>"{_esc(s)}"</span>' for s in snips)
+    ev_html = "".join(f'<div>"{_esc(s)}"</div>' for s in snips)
 
     public = item.get("public_tickers") or []
     private = item.get("private_or_unknown") or []
     if public:
         tickers_str = ", ".join(
-            f'{_esc(p["ticker"])} <small style="color:#57606a">({_esc(p["exchange"])})</small>'
+            f'{_esc(p["ticker"])} <span class="vz-sub">({_esc(p["exchange"])})</span>'
             for p in public
         )
     else:
@@ -554,19 +557,23 @@ def _render_card(item: dict) -> str:
     kn_html = (f'<div class="vz-row"><b>🔢 Key numbers:</b> {_join(key_numbers)}</div>'
                if key_numbers else "")
 
+    private_html = (f'<div class="vz-row"><b>🏷 Private/unclear:</b> {_join(private)}</div>'
+                    if private else "")
+
     return (
         '<div class="vz-card">'
+        '<div class="vz-head">'
         f'<div class="vz-tag">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
         f'<div class="vz-h3"><a href="{url}">{headline}</a></div>'
         + (f'<div class="vz-ev">{ev_html}</div>' if ev_html else '')
+        + '</div>'
         + f'<div class="vz-row"><b>🧭 What happened:</b> {_esc(item.get("what_happened_en") or "")}</div>'
         + kn_html
-        + '<div class="vz-row"><b>🎯 Affected:</b> '
-        f'Direct: {_join(item.get("affected_direct"))} | '
-        f'Indirect: {_join(item.get("affected_indirect"))} | '
-        f'Tickers: {tickers_str} | '
-        f'Private/unclear: {_join(private)}</div>'
-        '<div class="vz-row"><b>📊 Signal:</b> '
+        + f'<div class="vz-row"><b>🎯 Direct:</b> {_join(item.get("affected_direct"))}</div>'
+        + f'<div class="vz-row"><b>🔗 Indirect:</b> {_join(item.get("affected_indirect"))}</div>'
+        + f'<div class="vz-row"><b>📊 Tickers:</b> {tickers_str}</div>'
+        + private_html
+        + '<div class="vz-row"><b>📈 Signal:</b> '
         f'<span class="vz-badge" style="background:{fund_color}">Fundamental: {_esc(fund)}</span>'
         f'<span class="vz-badge" style="background:{react_color}">Market: {_esc(react)}</span>'
         '</div>'
