@@ -29,7 +29,7 @@ from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright
 RSS_URL = "https://www.vz.lt/rss"
 LOGIN_URL = "https://prisijungimas.vz.lt/verslo-zinios"
 HOMEPAGE = "https://www.vz.lt/"
-MAX_ARTICLES = 25
+MAX_ARTICLES = 18
 ARTICLE_FETCH_TIMEOUT_MS = 30_000
 GEMINI_MODEL = "gemini-2.5-flash"
 # Tried in order on sustained failures (503 / quota exhaustion).
@@ -467,7 +467,7 @@ ARTICLES:
 def gemini_extract(articles: list[dict]) -> dict:
     block = ""
     for a in articles:
-        body = a["body"][:5000]
+        body = a["body"][:3500]
         block += f"\n\n=== URL: {a['url']} ===\n=== TITLE: {a['title']} ===\n{body}"
     raw = gemini_call(
         EXTRACTION_PROMPT + block,
