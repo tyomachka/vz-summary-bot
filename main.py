@@ -9,8 +9,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import random
 import smtplib
 import sys
+import time
 import traceback
 from email.message import EmailMessage
 from pathlib import Path
@@ -19,6 +21,7 @@ from urllib.parse import urlparse
 import feedparser
 import trafilatura
 from google import genai
+from google.genai import errors as gerrors
 from google.genai import types
 from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright
 
@@ -128,6 +131,24 @@ def gclient() -> genai.Client:
     return _client
 
 
+# Retryable HTTP codes: 429 rate-limit, 500/502/503/504 transient server errors.
+# Anything else (e.g. 400 bad request, 401 auth, 403 quota-permanent) fails fast.
+_RETRYABLE_CODES = {429, 500, 502, 503, 504}
+_MAX_ATTEMPTS = 6
+_BASE_DELAY_S = 2.0
+_MAX_DELAY_S = 60.0
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if not isinstance(exc, gerrors.APIError):
+        return False
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code in _RETRYABLE_CODES:
+        return True
+    msg = str(exc)
+    return any(str(c) in msg for c in _RETRYABLE_CODES)
+
+
 def gemini_call(
     prompt: str,
     max_tokens: int = 16384,
@@ -137,12 +158,27 @@ def gemini_call(
     cfg_kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
     if json_mode:
         cfg_kwargs["response_mime_type"] = "application/json"
-    resp = gclient().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(**cfg_kwargs),
-    )
-    return (resp.text or "").strip()
+
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            resp = gclient().models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(**cfg_kwargs),
+            )
+            return (resp.text or "").strip()
+        except gerrors.APIError as e:
+            last_exc = e
+            if not _is_retryable(e) or attempt == _MAX_ATTEMPTS:
+                raise
+            delay = min(_MAX_DELAY_S, _BASE_DELAY_S * (2 ** (attempt - 1)))
+            delay *= 0.5 + random.random()  # jitter [0.5x, 1.5x]
+            code = getattr(e, "code", "?")
+            print(f"  gemini transient {code} (attempt {attempt}/{_MAX_ATTEMPTS}), "
+                  f"sleeping {delay:.1f}s", file=sys.stderr)
+            time.sleep(delay)
+    raise last_exc if last_exc else RuntimeError("gemini_call: unreachable")
 
 
 def strip_fences(text: str) -> str:
