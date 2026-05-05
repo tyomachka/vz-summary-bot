@@ -29,9 +29,107 @@ from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright
 RSS_URL = "https://www.vz.lt/rss"
 LOGIN_URL = "https://prisijungimas.vz.lt/verslo-zinios"
 HOMEPAGE = "https://www.vz.lt/"
-MAX_ARTICLES = 20
+MAX_ARTICLES = 25
 ARTICLE_FETCH_TIMEOUT_MS = 30_000
 GEMINI_MODEL = "gemini-2.5-flash"
+# Tried in order on sustained failures (503 / quota exhaustion).
+_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+
+# Static company → ticker map. Keys are lowercased substrings as they typically
+# appear in VŽ articles. Lookup is case-insensitive substring containment, so
+# "AB Apranga" matches "apranga". Used in validate(); never sent to Gemini.
+# Extend this dict over time as new names appear.
+TICKER_MAP: dict[str, dict] = {
+    # --- Nasdaq Baltic Main + Secondary (Lithuania) ---
+    "apranga": {"ticker": "APG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "ignitis grupė": {"ticker": "IGN1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "ignitis": {"ticker": "IGN1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "telia lietuva": {"ticker": "TEL1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "šiaulių bankas": {"ticker": "SAB1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "siauliu bankas": {"ticker": "SAB1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "auga group": {"ticker": "AUG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "grigeo": {"ticker": "GRG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "klaipėdos nafta": {"ticker": "KNF1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "kn energies": {"ticker": "KNF1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "panevėžio statybos trestas": {"ticker": "PTR1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "pieno žvaigždės": {"ticker": "PZV1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "rokiškio sūris": {"ticker": "RSU1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "snaigė": {"ticker": "SNG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "vilkyškių pieninė": {"ticker": "VLP1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "litgrid": {"ticker": "LGD1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "akropolis group": {"ticker": "APG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    # --- Nasdaq Baltic (Latvia) ---
+    "citadele": {"ticker": "CBL", "exchange": "Nasdaq Riga", "country": "LV", "cap": "mid"},
+    "latvijas gāze": {"ticker": "GZE1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "small"},
+    "olainfarm": {"ticker": "OLF1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "small"},
+    "sigulda": {"ticker": "SCM1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "micro"},
+    # --- Nasdaq Baltic (Estonia) ---
+    "tallink": {"ticker": "TAL1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "tallinna kaubamaja": {"ticker": "TKM1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "lhv group": {"ticker": "LHV1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "mid"},
+    "coop pank": {"ticker": "CPA1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "enefit green": {"ticker": "EGR1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "mid"},
+    "tallinna sadam": {"ticker": "TSM1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "mid"},
+    "harju elekter": {"ticker": "HAE1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "merko ehitus": {"ticker": "MRK1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "tallinna vesi": {"ticker": "TVEAT", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    # --- US mega/large caps frequently in VŽ ---
+    "apple": {"ticker": "AAPL", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "microsoft": {"ticker": "MSFT", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "alphabet": {"ticker": "GOOGL", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "google": {"ticker": "GOOGL", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "amazon": {"ticker": "AMZN", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "meta": {"ticker": "META", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "facebook": {"ticker": "META", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "nvidia": {"ticker": "NVDA", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "tesla": {"ticker": "TSLA", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "berkshire hathaway": {"ticker": "BRK.B", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "jpmorgan": {"ticker": "JPM", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "bank of america": {"ticker": "BAC", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "goldman sachs": {"ticker": "GS", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "morgan stanley": {"ticker": "MS", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "exxon": {"ticker": "XOM", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "chevron": {"ticker": "CVX", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "boeing": {"ticker": "BA", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "lockheed martin": {"ticker": "LMT", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "raytheon": {"ticker": "RTX", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "palantir": {"ticker": "PLTR", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "ebay": {"ticker": "EBAY", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "gamestop": {"ticker": "GME", "exchange": "NYSE", "country": "US", "cap": "small"},
+    "amd": {"ticker": "AMD", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "intel": {"ticker": "INTC", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "netflix": {"ticker": "NFLX", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "disney": {"ticker": "DIS", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "uber": {"ticker": "UBER", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "coca-cola": {"ticker": "KO", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "pfizer": {"ticker": "PFE", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "moderna": {"ticker": "MRNA", "exchange": "Nasdaq", "country": "US", "cap": "mid"},
+    "openai": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
+    "spacex": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
+    "stripe": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
+    "huawei": {"ticker": "N/A private", "exchange": "—", "country": "CN", "cap": "—"},
+    "msc": {"ticker": "N/A private", "exchange": "—", "country": "CH", "cap": "—"},
+    # --- Europe ---
+    "asml": {"ticker": "ASML", "exchange": "Euronext Amsterdam", "country": "NL", "cap": "mega"},
+    "lvmh": {"ticker": "MC", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    "siemens": {"ticker": "SIE", "exchange": "Xetra", "country": "DE", "cap": "mega"},
+    "volkswagen": {"ticker": "VOW3", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "bmw": {"ticker": "BMW", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "mercedes-benz": {"ticker": "MBG", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "deutsche bank": {"ticker": "DBK", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "ing": {"ticker": "INGA", "exchange": "Euronext Amsterdam", "country": "NL", "cap": "large"},
+    "swedbank": {"ticker": "SWED-A", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "seb": {"ticker": "SEB-A", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "nordea": {"ticker": "NDA-FI", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
+    # --- Asia ---
+    "tsmc": {"ticker": "TSM", "exchange": "NYSE", "country": "TW", "cap": "mega"},
+    "samsung": {"ticker": "005930", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    "alibaba": {"ticker": "BABA", "exchange": "NYSE", "country": "CN", "cap": "mega"},
+    "tencent": {"ticker": "0700", "exchange": "HKEX", "country": "CN", "cap": "mega"},
+    "byd": {"ticker": "1211", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "zte": {"ticker": "0763", "exchange": "HKEX", "country": "CN", "cap": "mid"},
+}
+_BALTIC_COUNTRIES = {"LT", "LV", "EE"}
 
 ROOT = Path(__file__).parent
 STATE_FILE = ROOT / "state" / "last_run.json"
@@ -149,35 +247,68 @@ def _is_retryable(exc: Exception) -> bool:
     return any(str(c) in msg for c in _RETRYABLE_CODES)
 
 
+def _retry_delay_hint(exc: Exception) -> float | None:
+    """Parse retryDelay (e.g. '24s') from a 429 APIError body, if present."""
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        return None
+    for d in (details.get("error", {}) or {}).get("details", []) or []:
+        if d.get("@type", "").endswith("RetryInfo"):
+            raw = d.get("retryDelay") or ""
+            if raw.endswith("s"):
+                try:
+                    return float(raw[:-1])
+                except ValueError:
+                    return None
+    return None
+
+
 def gemini_call(
     prompt: str,
     max_tokens: int = 16384,
     temperature: float = 0.3,
     json_mode: bool = False,
 ) -> str:
+    """Call Gemini with retry + model fallback.
+
+    Tries each model in _FALLBACK_MODELS in order. For each, retries
+    transient errors (429/5xx) up to _MAX_ATTEMPTS times with backoff.
+    Honors retryDelay hint from 429 responses when present.
+    """
     cfg_kwargs = {"temperature": temperature, "max_output_tokens": max_tokens}
     if json_mode:
         cfg_kwargs["response_mime_type"] = "application/json"
 
     last_exc: Exception | None = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            resp = gclient().models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(**cfg_kwargs),
-            )
-            return (resp.text or "").strip()
-        except gerrors.APIError as e:
-            last_exc = e
-            if not _is_retryable(e) or attempt == _MAX_ATTEMPTS:
-                raise
-            delay = min(_MAX_DELAY_S, _BASE_DELAY_S * (2 ** (attempt - 1)))
-            delay *= 0.5 + random.random()  # jitter [0.5x, 1.5x]
-            code = getattr(e, "code", "?")
-            print(f"  gemini transient {code} (attempt {attempt}/{_MAX_ATTEMPTS}), "
-                  f"sleeping {delay:.1f}s", file=sys.stderr)
-            time.sleep(delay)
+    for model in _FALLBACK_MODELS:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                resp = gclient().models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(**cfg_kwargs),
+                )
+                if model != _FALLBACK_MODELS[0]:
+                    print(f"  gemini fallback succeeded on {model}", file=sys.stderr)
+                return (resp.text or "").strip()
+            except gerrors.APIError as e:
+                last_exc = e
+                if not _is_retryable(e):
+                    raise
+                if attempt == _MAX_ATTEMPTS:
+                    print(f"  gemini exhausted retries on {model}, trying next model",
+                          file=sys.stderr)
+                    break
+                hint = _retry_delay_hint(e)
+                if hint is not None:
+                    delay = min(_MAX_DELAY_S, hint + random.random())
+                else:
+                    delay = min(_MAX_DELAY_S, _BASE_DELAY_S * (2 ** (attempt - 1)))
+                    delay *= 0.5 + random.random()
+                code = getattr(e, "code", "?")
+                print(f"  gemini transient {code} on {model} (attempt {attempt}/"
+                      f"{_MAX_ATTEMPTS}), sleeping {delay:.1f}s", file=sys.stderr)
+                time.sleep(delay)
     raise last_exc if last_exc else RuntimeError("gemini_call: unreachable")
 
 
@@ -195,57 +326,47 @@ def strip_fences(text: str) -> str:
     return text.strip()
 
 
-def pre_filter_conditional(items: list[dict]) -> list[dict]:
-    if not items:
-        return []
-    titles = "\n".join(
-        f"{i + 1}. {x['title']} — {x.get('description', '')[:200]}"
-        for i, x in enumerate(items)
-    )
-    prompt = (
-        "Below are Lithuanian newsletter article teasers. For each one, decide: "
-        "is it INVESTING-RELEVANT (mentions a specific company, sector, regulation, "
-        "tax, labor market, investment, market move, commodity, or macroeconomic "
-        "indicator)?\n\n"
-        "Output ONLY a JSON array of integers — the 1-based line numbers of items "
-        "that ARE investing-relevant. No prose. Example: [1, 3, 7]\n\n" + titles
-    )
-    raw = gemini_call(prompt, max_tokens=2048, temperature=0.0)
-    try:
-        keep = json.loads(strip_fences(raw))
-        if not isinstance(keep, list):
-            raise ValueError
-    except Exception:
-        return items
-    return [items[i - 1] for i in keep if isinstance(i, int) and 1 <= i <= len(items)]
+EXTRACTION_PROMPT = """You are an investment-news analyst processing Lithuanian Verslo žinios articles. Output ONLY valid JSON matching the schema. No prose, no code fences, no HTML, no commentary.
 
-
-EXTRACTION_PROMPT = """You are a financial news analyst extracting structured data from Lithuanian Verslo žinios articles. Output ONLY valid JSON matching the schema. No prose, no code fences, no HTML.
+ANALYSIS LOGIC:
+1. First, classify the article into one "article_type" (see schema). A useful investment summary may be a macro signal, sector risk, regulation watch, private-company signal, or low_relevance skip — DO NOT force every article into a public-company shape.
+2. Ignore: ads, "Rekomenduojame", "Verslo tribūna", sponsored blocks, footers, unsubscribe text, contact info, repeated recommendations, lifestyle/culture items unless investment-relevant.
+3. If article_type is "low_relevance" or "sponsored_or_ad", you may still output the item with minimal fields (url + article_type + headline_en); Python drops it.
+4. If the article appears to be a liveblog / "Dienos pulsas" / "Dienos akcentai" / timestamped market ticker, set is_liveblog=true.
 
 HARD RULES (violation = invalid output):
-1. Every item MUST have "source_quote_lt" — a verbatim Lithuanian substring of THAT article's body, 8-30 words. No paraphrasing, no translation. If you can't find one, omit the item.
-2. "url" must match the URL provided for that article exactly.
-3. Tickers may only appear if the company name appears verbatim in the article body. Otherwise empty array.
-4. NEVER invent items, companies, tickers, or numbers. Zero items is a valid output.
-5. Numbers in catalyst/investor_takeaway must come from the article. If none, write "No numeric figure given in article."
-6. No analyst-view block, no ratings, no price targets.
+- "url" must match the URL provided for that article exactly.
+- Every "evidence_lt" snippet must be a verbatim Lithuanian substring of THAT article's body. 8–15 words. No paraphrasing, no translation. Prefer snippets that contain numbers.
+- 2–7 evidence snippets per item. If you can't find ≥2 snippets, omit the item entirely.
+- NEVER output BUY / SELL / HOLD / "rekomenduoja pirkti" type advice.
+- NEVER output analyst price targets or analyst ratings.
+- NEVER invent tickers — list company names in "candidate_companies" exactly as written in the article; Python validates against a static map. DO NOT include a "tickers" field.
+- Numbers in key_numbers and investor_meaning_en must come from the article body, not your prior knowledge.
+- For regulation/policy, hedge in what_happened_en if the change is proposed/draft/non-final ("siūloma", "svarstoma", "projektas").
+- For public companies, separate fundamental signal (the underlying event) from market reaction (what the stock did).
+- Do not duplicate the same story across digest + full article. If two URLs cover the same event, output only the one with longer body.
 
-Schema (output exactly this shape):
+Schema (per item):
 {
-  "items": [
-    {
-      "url": "<article URL exactly as provided>",
-      "category": "macro|company|market|commodity|geopolitical|regulation|rates|labor|real_estate|energy|other",
-      "importance": "high|medium|low",
-      "headline_en": "<English, <=12 words>",
-      "source_quote_lt": "<verbatim Lithuanian, 8-30 words>",
-      "tickers": ["..."],
-      "direction": "bullish|bearish|neutral|mixed",
-      "catalyst": "<1 sentence with concrete number from article OR 'No numeric figure given in article.'>",
-      "investor_takeaway": "<2 sentences: number + direction + implication>"
-    }
-  ]
+  "url": "<exact URL provided>",
+  "article_type": "direct_public_company|private_company|sector_signal|macro_signal|commodity_signal|geopolitical_signal|regulation_policy|market_overview|personal_finance|educational|low_relevance|sponsored_or_ad",
+  "is_liveblog": false,
+  "importance": "high|medium|low",
+  "confidence": "high|medium|low",
+  "headline_en": "<<=12 words>",
+  "evidence_lt": ["<verbatim LT snippet 8-15 words>", "..."],
+  "what_happened_en": "<1-2 factual sentences; hedge if proposed/not final>",
+  "key_numbers": ["<number + brief context>", "..."],
+  "candidate_companies": ["<company name as written in article>", "..."],
+  "affected_direct": ["<companies/sectors/countries directly mentioned>"],
+  "affected_indirect": ["<sectors/assets/markets possibly affected>"],
+  "signal_fundamental": "bullish|bearish|mixed|neutral|unclear",
+  "signal_market_reaction": "positive|negative|neutral|unknown",
+  "investor_meaning_en": "<2-3 sentences: short-term signal + longer-term context. Do not overclaim.>",
+  "monitor": ["<optional point to watch next>", "..."]
 }
+
+Output exactly: {"items": [<item>, <item>, ...]}
 
 ARTICLES:
 """
@@ -276,89 +397,229 @@ def normalize_text(s: str) -> str:
     return " ".join(s.split()).lower()
 
 
+_DROP_TYPES = {"low_relevance", "sponsored_or_ad"}
+_IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def _lookup_ticker(name: str) -> dict | None:
+    """Case-insensitive substring match against TICKER_MAP."""
+    if not name:
+        return None
+    n = name.strip().lower()
+    if n in TICKER_MAP:
+        return TICKER_MAP[n]
+    for key, info in TICKER_MAP.items():
+        if key in n or n in key:
+            return info
+    return None
+
+
 def validate(extracted: dict, articles: list[dict]) -> list[dict]:
     by_url = {a["url"]: a for a in articles}
-    valid = []
-    for item in extracted.get("items", []):
+    raw_items = extracted.get("items", []) or []
+    cleaned: list[dict] = []
+
+    for item in raw_items:
+        a_type = (item.get("article_type") or "").strip().lower()
+        if a_type in _DROP_TYPES:
+            print(f"  drop ({a_type}): {item.get('url')}")
+            continue
+
         a = by_url.get(item.get("url"))
         if not a:
+            print(f"  drop (unknown url): {item.get('url')}")
             continue
+
         body_norm = normalize_text(a["body"])
-        quote_norm = normalize_text(item.get("source_quote_lt", ""))
-        if quote_norm and quote_norm in body_norm:
-            valid.append(item)
+        snippets = item.get("evidence_lt") or []
+        valid_snippets = [s for s in snippets if s and normalize_text(s) in body_norm]
+        if len(valid_snippets) < 2:
+            print(f"  drop (<2 valid evidence snippets): {item.get('url')}")
+            continue
+        item["evidence_lt"] = valid_snippets
+
+        # Resolve company names against ticker map.
+        public, private = [], []
+        seen = set()
+        for name in item.get("candidate_companies") or []:
+            info = _lookup_ticker(name)
+            if info is None:
+                key = name.strip().lower()
+                if key and key not in seen:
+                    private.append(name.strip())
+                    seen.add(key)
+            else:
+                key = info["ticker"]
+                if key not in seen:
+                    if key.startswith("N/A"):
+                        private.append(f"{name.strip()} ({key})")
+                    else:
+                        public.append(info)
+                    seen.add(key)
+        item["public_tickers"] = public
+        item["private_or_unknown"] = private
+
+        item["is_baltic"] = any(p.get("country") in _BALTIC_COUNTRIES for p in public)
+        cleaned.append(item)
+
+    # Dedup: by URL first (already enforced via by_url) then by headline prefix.
+    by_headline: dict[str, dict] = {}
+    for item in cleaned:
+        key = (item.get("headline_en") or "").strip().lower()[:30]
+        if not key:
+            by_headline[item.get("url", id(item))] = item
+            continue
+        existing = by_headline.get(key)
+        if existing is None:
+            by_headline[key] = item
         else:
-            print(f"  drop (quote not in body): {item.get('url')}")
-    return valid
+            er = _IMPORTANCE_RANK.get((existing.get("importance") or "low").lower(), 3)
+            ir = _IMPORTANCE_RANK.get((item.get("importance") or "low").lower(), 3)
+            if ir < er:
+                by_headline[key] = item
+                print(f"  dedup: kept higher-importance variant for '{key}'")
+    return list(by_headline.values())
 
 
-_DIRECTION_COLORS = {
-    "bullish": "#1a7f37",
-    "bearish": "#cf222e",
-    "neutral": "#57606a",
-    "mixed": "#9a6700",
+_FUND_COLORS = {
+    "bullish": "#1a7f37", "bearish": "#cf222e",
+    "mixed": "#9a6700", "neutral": "#57606a", "unclear": "#8c959f",
 }
-_IMPORTANCE_ORDER = {"high": 0, "medium": 1, "low": 2}
+_REACT_COLORS = {
+    "positive": "#1a7f37", "negative": "#cf222e",
+    "neutral": "#57606a", "unknown": "#8c959f",
+}
+
+_EMAIL_STYLE = """<style>
+.vz-wrap{font-family:-apple-system,Segoe UI,sans-serif;max-width:720px;color:#1f2328;font-size:14px;line-height:1.45}
+.vz-meta{font-size:12px;color:#57606a;margin-bottom:14px}
+.vz-h2{font-size:14px;color:#57606a;text-transform:uppercase;letter-spacing:.5px;margin:22px 0 10px}
+.vz-brief{padding:10px 14px;background:#f6f8fa;border-left:3px solid #0969da;border-radius:4px;margin:0 0 18px}
+.vz-brief ul{margin:0;padding-left:18px}
+.vz-brief li{margin:4px 0}
+.vz-card{border:1px solid #d0d7de;border-radius:6px;padding:12px 14px;margin:0 0 14px}
+.vz-tag{display:inline-block;font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.vz-tag .lb{color:#cf222e;font-weight:600}
+.vz-h3{margin:0 0 6px;font-size:14px;font-weight:600}
+.vz-h3 a{color:#0969da;text-decoration:none}
+.vz-ev{margin:6px 0;padding:6px 10px;border-left:3px solid #d0d7de;color:#57606a;font-size:12px}
+.vz-ev span{display:block;margin:1px 0}
+.vz-row{margin:4px 0;font-size:13px}
+.vz-row b{color:#57606a;font-weight:600;margin-right:4px}
+.vz-badge{display:inline-block;color:#fff;padding:1px 7px;border-radius:3px;font-weight:600;font-size:11px;margin-right:6px}
+</style>"""
 
 
-def _esc(s: str) -> str:
+def _esc(s) -> str:
     return (str(s).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+def _join(items, sep=" · "):
+    return sep.join(_esc(x) for x in items if x) if items else "—"
+
+
 def _render_card(item: dict) -> str:
-    direction = (item.get("direction") or "neutral").lower()
-    color = _DIRECTION_COLORS.get(direction, "#57606a")
-    tickers = item.get("tickers") or []
-    tickers_str = ", ".join(_esc(t) for t in tickers) if tickers else "—"
+    a_type = _esc((item.get("article_type") or "other").replace("_", " "))
+    importance = _esc(item.get("importance") or "—")
+    confidence = _esc(item.get("confidence") or "—")
+    liveblog = ' · <span class="lb">🔴 LIVEBLOG</span>' if item.get("is_liveblog") else ""
+
+    headline = _esc(item.get("headline_en") or "")
+    url = _esc(item.get("url") or "")
+
+    snips = (item.get("evidence_lt") or [])[:3]
+    ev_html = "".join(f'<span>"{_esc(s)}"</span>' for s in snips)
+
+    public = item.get("public_tickers") or []
+    private = item.get("private_or_unknown") or []
+    if public:
+        tickers_str = ", ".join(
+            f'{_esc(p["ticker"])} <small style="color:#57606a">({_esc(p["exchange"])})</small>'
+            for p in public
+        )
+    else:
+        tickers_str = "—"
+
+    fund = (item.get("signal_fundamental") or "neutral").lower()
+    react = (item.get("signal_market_reaction") or "neutral").lower()
+    fund_color = _FUND_COLORS.get(fund, "#57606a")
+    react_color = _REACT_COLORS.get(react, "#57606a")
+
+    monitor = item.get("monitor") or []
+    monitor_html = (f'<div class="vz-row"><b>👁 Monitor:</b> {_join(monitor)}</div>'
+                    if monitor else "")
+
+    key_numbers = item.get("key_numbers") or []
+    kn_html = (f'<div class="vz-row"><b>🔢 Key numbers:</b> {_join(key_numbers)}</div>'
+               if key_numbers else "")
+
     return (
-        '<div style="border:1px solid #d0d7de;border-radius:8px;padding:14px 16px;'
-        'margin:0 0 16px;font-family:-apple-system,Segoe UI,sans-serif;max-width:680px;color:#1f2328">'
-        '<div style="border-bottom:1px dashed #d0d7de;padding-bottom:10px;margin-bottom:10px">'
-        '<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
-        f'letter-spacing:0.5px;margin-bottom:4px">📰 {_esc(item.get("category", ""))} · '
-        f'{_esc(item.get("importance", ""))}</div>'
-        f'<h3 style="margin:0 0 6px;font-size:15px"><a href="{_esc(item.get("url", ""))}" '
-        f'style="color:#0969da;text-decoration:none">{_esc(item.get("headline_en", ""))}</a></h3>'
-        '<blockquote style="margin:0;padding:6px 12px;border-left:3px solid #d0d7de;'
-        f'color:#57606a;font-size:13px">"{_esc(item.get("source_quote_lt", ""))}"</blockquote>'
+        '<div class="vz-card">'
+        f'<div class="vz-tag">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
+        f'<div class="vz-h3"><a href="{url}">{headline}</a></div>'
+        + (f'<div class="vz-ev">{ev_html}</div>' if ev_html else '')
+        + f'<div class="vz-row"><b>🧭 What happened:</b> {_esc(item.get("what_happened_en") or "")}</div>'
+        + kn_html
+        + '<div class="vz-row"><b>🎯 Affected:</b> '
+        f'Direct: {_join(item.get("affected_direct"))} | '
+        f'Indirect: {_join(item.get("affected_indirect"))} | '
+        f'Tickers: {tickers_str} | '
+        f'Private/unclear: {_join(private)}</div>'
+        '<div class="vz-row"><b>📊 Signal:</b> '
+        f'<span class="vz-badge" style="background:{fund_color}">Fundamental: {_esc(fund)}</span>'
+        f'<span class="vz-badge" style="background:{react_color}">Market: {_esc(react)}</span>'
         '</div>'
-        '<div style="font-size:13px">'
-        f'<p style="margin:0 0 6px"><strong>📊 Tickers:</strong> {tickers_str}</p>'
-        '<p style="margin:0 0 6px"><strong>📈 Direction:</strong> '
-        f'<span style="background:{color};color:#fff;padding:1px 8px;border-radius:4px;'
-        f'font-weight:600;font-size:12px">{_esc(direction.capitalize())}</span></p>'
-        f'<p style="margin:0 0 6px"><strong>⚡ Catalyst:</strong> {_esc(item.get("catalyst", ""))}</p>'
-        f'<p style="margin:0"><strong>💡 Takeaway:</strong> {_esc(item.get("investor_takeaway", ""))}</p>'
-        '</div>'
-        '</div>'
+        f'<div class="vz-row"><b>💡 Investor meaning:</b> {_esc(item.get("investor_meaning_en") or "")}</div>'
+        + monitor_html
+        + '</div>'
     )
+
+
+def _brief_bullets(validated: list[dict], n: int = 5) -> list[str]:
+    """Pick top-N items for the executive brief, with Baltic-relevance tiebreaker."""
+    def sort_key(x):
+        rank = _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3)
+        baltic = 0 if x.get("is_baltic") else 1
+        return (rank, baltic)
+    top = sorted(validated, key=sort_key)[:n]
+    out = []
+    for it in top:
+        meaning = (it.get("investor_meaning_en") or it.get("what_happened_en") or "").strip()
+        if len(meaning) > 160:
+            meaning = meaning[:157].rstrip() + "…"
+        headline = (it.get("headline_en") or "").strip()
+        out.append(f"<b>{_esc(headline)}.</b> {_esc(meaning)}")
+    return out
 
 
 def render_html(validated: list[dict], today: dt.date) -> str:
     if not validated:
-        return ('<p style="font-family:-apple-system,Segoe UI,sans-serif;max-width:680px">'
-                'No new investing-relevant VŽ articles in this period.</p>')
+        return (_EMAIL_STYLE +
+                '<div class="vz-wrap"><p>No new investing-relevant VŽ articles in this period.</p></div>')
 
-    tickered = [x for x in validated if x.get("tickers")]
-    macro = [x for x in validated if not x.get("tickers")]
-    sort_key = lambda x: _IMPORTANCE_ORDER.get((x.get("importance") or "low").lower(), 3)
-    tickered.sort(key=sort_key)
-    macro.sort(key=sort_key)
+    cards = sorted(
+        validated,
+        key=lambda x: (
+            _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3),
+            0 if x.get("is_baltic") else 1,
+        ),
+    )
+    bullets = _brief_bullets(validated, n=min(5, len(validated)))
 
-    parts = [
-        '<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:680px;'
-        f'font-size:12px;color:#57606a;margin-bottom:12px">{today.isoformat()} • '
-        f'{len(validated)} items</div>'
-    ]
-    if tickered:
-        parts.append('<h2 style="font-size:14px;color:#57606a;text-transform:uppercase;'
-                     'letter-spacing:0.5px;margin:20px 0 10px">📊 Tickered</h2>')
-        parts.extend(_render_card(x) for x in tickered)
-    if macro:
-        parts.append('<h2 style="font-size:14px;color:#57606a;text-transform:uppercase;'
-                     'letter-spacing:0.5px;margin:20px 0 10px">🌍 Macro &amp; Other</h2>')
-        parts.extend(_render_card(x) for x in macro)
+    parts = [_EMAIL_STYLE, '<div class="vz-wrap">',
+             f'<div class="vz-meta">Investment Brief · {today.isoformat()} · '
+             f'{len(validated)} signals</div>']
+
+    if bullets:
+        parts.append('<h2 class="vz-h2">A · Executive Brief</h2>')
+        parts.append('<div class="vz-brief"><ul>')
+        parts.extend(f'<li>{b}</li>' for b in bullets)
+        parts.append('</ul></div>')
+
+    parts.append('<h2 class="vz-h2">B · Top Signals</h2>')
+    parts.extend(_render_card(c) for c in cards)
+    parts.append('</div>')
     return "".join(parts)
 
 
@@ -455,10 +716,8 @@ def run() -> None:
     high, conditional, _skip = tier_filter(rss_items)
     print(f"High-tier: {len(high)} | Conditional: {len(conditional)}")
 
-    if conditional:
-        kept = pre_filter_conditional(conditional)
-        print(f"Conditional after Gemini pre-filter: {len(kept)}")
-        conditional = kept
+    # Note: conditional articles flow straight into extraction; the Gemini
+    # extraction prompt classifies and discards low-relevance items.
 
     candidates = (high + conditional)
     candidates.sort(key=lambda x: x["published"], reverse=True)
