@@ -130,14 +130,83 @@ TICKER_MAP: dict[str, dict] = {
     "swedbank": {"ticker": "SWED-A", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
     "seb": {"ticker": "SEB-A", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
     "nordea": {"ticker": "NDA-FI", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
-    # --- Asia ---
-    "tsmc": {"ticker": "TSM", "exchange": "NYSE", "country": "TW", "cap": "mega"},
-    "samsung": {"ticker": "005930", "exchange": "KRX", "country": "KR", "cap": "mega"},
-    "alibaba": {"ticker": "BABA", "exchange": "NYSE", "country": "CN", "cap": "mega"},
-    "tencent": {"ticker": "0700", "exchange": "HKEX", "country": "CN", "cap": "mega"},
-    "byd": {"ticker": "1211", "exchange": "HKEX", "country": "CN", "cap": "large"},
-    "zte": {"ticker": "0763", "exchange": "HKEX", "country": "CN", "cap": "mid"},
-    "sk hynix": {"ticker": "000660", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    # --- Asia: Korea ---
+    "samsung": {"ticker": "005930", "provider_symbol": "005930.KS", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    "samsung electronics": {"ticker": "005930", "provider_symbol": "005930.KS", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    "sk hynix": {"ticker": "000660", "provider_symbol": "000660.KS", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    "hynix": {"ticker": "000660", "provider_symbol": "000660.KS", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    "lg energy solution": {"ticker": "373220", "provider_symbol": "373220.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "lg chem": {"ticker": "051910", "provider_symbol": "051910.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "samsung sdi": {"ticker": "006400", "provider_symbol": "006400.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "hyundai motor": {"ticker": "005380", "provider_symbol": "005380.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "hyundai": {"ticker": "005380", "provider_symbol": "005380.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "kia corp": {"ticker": "000270", "provider_symbol": "000270.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "kia": {"ticker": "000270", "provider_symbol": "000270.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "naver": {"ticker": "035420", "provider_symbol": "035420.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    "kakao": {"ticker": "035720", "provider_symbol": "035720.KS", "exchange": "KRX", "country": "KR", "cap": "large"},
+    # --- Asia: Taiwan ---
+    "tsmc": {"ticker": "2330", "provider_symbol": "2330.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "mega", "adr_ticker": "TSM", "adr_exchange": "NYSE"},
+    "taiwan semiconductor": {"ticker": "2330", "provider_symbol": "2330.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "mega", "adr_ticker": "TSM", "adr_exchange": "NYSE"},
+    "taiwan semiconductor manufacturing": {"ticker": "2330", "provider_symbol": "2330.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "mega", "adr_ticker": "TSM", "adr_exchange": "NYSE"},
+    "hon hai": {"ticker": "2317", "provider_symbol": "2317.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "large"},
+    "foxconn": {"ticker": "2317", "provider_symbol": "2317.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "large"},
+    "mediatek": {"ticker": "2454", "provider_symbol": "2454.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "large"},
+    "united microelectronics": {"ticker": "2303", "provider_symbol": "2303.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "large", "adr_ticker": "UMC", "adr_exchange": "NYSE"},
+    "umc": {"ticker": "2303", "provider_symbol": "2303.TW", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "large", "adr_ticker": "UMC", "adr_exchange": "NYSE"},
+    # --- Asia: Japan ---
+    "toyota": {"ticker": "7203", "provider_symbol": "7203.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "mega", "adr_ticker": "TM", "adr_exchange": "NYSE"},
+    "toyota motor": {"ticker": "7203", "provider_symbol": "7203.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "mega", "adr_ticker": "TM", "adr_exchange": "NYSE"},
+    "honda": {"ticker": "7267", "provider_symbol": "7267.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large", "adr_ticker": "HMC", "adr_exchange": "NYSE"},
+    "honda motor": {"ticker": "7267", "provider_symbol": "7267.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large", "adr_ticker": "HMC", "adr_exchange": "NYSE"},
+    "nissan": {"ticker": "7201", "provider_symbol": "7201.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "sony": {"ticker": "6758", "provider_symbol": "6758.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "mega", "adr_ticker": "SONY", "adr_exchange": "NYSE"},
+    "sony group": {"ticker": "6758", "provider_symbol": "6758.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "mega", "adr_ticker": "SONY", "adr_exchange": "NYSE"},
+    "softbank group": {"ticker": "9984", "provider_symbol": "9984.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "softbank": {"ticker": "9984", "provider_symbol": "9984.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "nintendo": {"ticker": "7974", "provider_symbol": "7974.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "hitachi": {"ticker": "6501", "provider_symbol": "6501.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "tokyo electron": {"ticker": "8035", "provider_symbol": "8035.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "advantest": {"ticker": "6857", "provider_symbol": "6857.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "renesas": {"ticker": "6723", "provider_symbol": "6723.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "renesas electronics": {"ticker": "6723", "provider_symbol": "6723.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "mitsubishi ufj": {"ticker": "8306", "provider_symbol": "8306.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "mega", "adr_ticker": "MUFG", "adr_exchange": "NYSE"},
+    "sumitomo mitsui": {"ticker": "8316", "provider_symbol": "8316.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large", "adr_ticker": "SMFG", "adr_exchange": "NYSE"},
+    "mizuho": {"ticker": "8411", "provider_symbol": "8411.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large", "adr_ticker": "MFG", "adr_exchange": "NYSE"},
+    "mitsubishi corp": {"ticker": "8058", "provider_symbol": "8058.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "mitsui": {"ticker": "8031", "provider_symbol": "8031.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "fast retailing": {"ticker": "9983", "provider_symbol": "9983.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    "uniqlo": {"ticker": "9983", "provider_symbol": "9983.T", "exchange": "Tokyo Stock Exchange", "country": "JP", "cap": "large"},
+    # --- Asia: China / Hong Kong ---
+    "tencent": {"ticker": "0700", "provider_symbol": "0700.HK", "exchange": "HKEX", "country": "CN", "cap": "mega"},
+    "alibaba": {"ticker": "9988", "provider_symbol": "9988.HK", "exchange": "HKEX", "country": "CN", "cap": "mega", "adr_ticker": "BABA", "adr_exchange": "NYSE"},
+    "byd": {"ticker": "1211", "provider_symbol": "1211.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "byd co": {"ticker": "1211", "provider_symbol": "1211.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "byd company": {"ticker": "1211", "provider_symbol": "1211.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "zte": {"ticker": "0763", "provider_symbol": "0763.HK", "exchange": "HKEX", "country": "CN", "cap": "mid"},
+    "xiaomi": {"ticker": "1810", "provider_symbol": "1810.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "meituan": {"ticker": "3690", "provider_symbol": "3690.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "baidu": {"ticker": "9888", "provider_symbol": "9888.HK", "exchange": "HKEX", "country": "CN", "cap": "large", "adr_ticker": "BIDU", "adr_exchange": "Nasdaq"},
+    "kuaishou": {"ticker": "1024", "provider_symbol": "1024.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "smic": {"ticker": "0981", "provider_symbol": "0981.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "semiconductor manufacturing international": {"ticker": "0981", "provider_symbol": "0981.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "catl": {"ticker": "300750", "provider_symbol": "300750.SZ", "exchange": "Shenzhen Stock Exchange", "country": "CN", "cap": "large"},
+    "contemporary amperex": {"ticker": "300750", "provider_symbol": "300750.SZ", "exchange": "Shenzhen Stock Exchange", "country": "CN", "cap": "large"},
+    "ping an": {"ticker": "2318", "provider_symbol": "2318.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "petrochina": {"ticker": "0857", "provider_symbol": "0857.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "cnooc": {"ticker": "0883", "provider_symbol": "0883.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "china mobile": {"ticker": "0941", "provider_symbol": "0941.HK", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "li auto": {"ticker": "2015", "provider_symbol": "2015.HK", "exchange": "HKEX", "country": "CN", "cap": "large", "adr_ticker": "LI", "adr_exchange": "Nasdaq"},
+    "nio": {"ticker": "9866", "provider_symbol": "9866.HK", "exchange": "HKEX", "country": "CN", "cap": "mid", "adr_ticker": "NIO", "adr_exchange": "NYSE"},
+    "xpeng": {"ticker": "9868", "provider_symbol": "9868.HK", "exchange": "HKEX", "country": "CN", "cap": "mid", "adr_ticker": "XPEV", "adr_exchange": "NYSE"},
+    # --- Asia: India ---
+    "reliance industries": {"ticker": "RELIANCE", "provider_symbol": "RELIANCE.NS", "exchange": "NSE India", "country": "IN", "cap": "mega"},
+    "tata motors": {"ticker": "TATAMOTORS", "provider_symbol": "TATAMOTORS.NS", "exchange": "NSE India", "country": "IN", "cap": "large"},
+    "tata consultancy": {"ticker": "TCS", "provider_symbol": "TCS.NS", "exchange": "NSE India", "country": "IN", "cap": "mega"},
+    "infosys": {"ticker": "INFY", "provider_symbol": "INFY.NS", "exchange": "NSE India", "country": "IN", "cap": "large", "adr_ticker": "INFY", "adr_exchange": "NYSE"},
+    "hdfc bank": {"ticker": "HDFCBANK", "provider_symbol": "HDFCBANK.NS", "exchange": "NSE India", "country": "IN", "cap": "large", "adr_ticker": "HDB", "adr_exchange": "NYSE"},
+    "icici bank": {"ticker": "ICICIBANK", "provider_symbol": "ICICIBANK.NS", "exchange": "NSE India", "country": "IN", "cap": "large", "adr_ticker": "IBN", "adr_exchange": "NYSE"},
+    "adani enterprises": {"ticker": "ADANIENT", "provider_symbol": "ADANIENT.NS", "exchange": "NSE India", "country": "IN", "cap": "large"},
+    "mahindra mahindra": {"ticker": "M&M", "provider_symbol": "M&M.NS", "exchange": "NSE India", "country": "IN", "cap": "large"},
     # --- Nasdaq Vilnius (additional LT listed) ---
     "akola": {"ticker": "AKO1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
     "linas agro": {"ticker": "AKO1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
@@ -251,7 +320,8 @@ TICKER_MAP: dict[str, dict] = {
     "target": {"ticker": "TGT", "exchange": "NYSE", "country": "US", "cap": "large"},
     "home depot": {"ticker": "HD", "exchange": "NYSE", "country": "US", "cap": "mega"},
     "pdd": {"ticker": "PDD", "exchange": "Nasdaq", "country": "CN", "cap": "large"},
-    "jd.com": {"ticker": "JD", "exchange": "Nasdaq", "country": "CN", "cap": "large"},
+    "jd.com": {"ticker": "9618", "provider_symbol": "9618.HK", "exchange": "HKEX", "country": "CN", "cap": "large", "adr_ticker": "JD", "adr_exchange": "Nasdaq"},
+    "jd com": {"ticker": "9618", "provider_symbol": "9618.HK", "exchange": "HKEX", "country": "CN", "cap": "large", "adr_ticker": "JD", "adr_exchange": "Nasdaq"},
     "mercadolibre": {"ticker": "MELI", "exchange": "Nasdaq", "country": "UY", "cap": "large"},
     # --- Global: autos ---
     "stellantis": {"ticker": "STLAM", "exchange": "Borsa Italiana", "country": "NL", "cap": "large"},
@@ -479,6 +549,14 @@ INSTRUMENT_MAP: dict[str, dict] = {
 }
 
 _BALTIC_COUNTRIES = {"LT", "LV", "EE"}
+
+# Keys that are too short (<5 chars) or too generic to allow substring matching.
+# These are only resolved via exact normalized match (pass 1/2 of _lookup_ticker).
+# Pass 3 (substring) explicitly skips them even if they were somehow >= 5 chars.
+_EXACT_TICKER_KEYS: frozenset[str] = frozenset({
+    "byd", "kia", "nio", "umc", "tsmc", "smic", "catl",
+    "amd", "arm", "abb", "sap", "kia",
+})
 
 ROOT = Path(__file__).parent
 STATE_FILE = ROOT / "state" / "last_run.json"
@@ -1078,11 +1156,13 @@ _SUBSIDIARY_QUALIFIERS = {
 def _lookup_ticker(name: str) -> dict | None:
     """
     Three-pass lookup against TICKER_MAP:
-    1. Normalized exact match (lowercase, no LT quotes/punctuation)
+    1. Normalized exact match (lowercase, strip LT quotes/corporate suffixes)
     2. Accent-insensitive exact match (ą→a, š→s, ž→z, etc.)
-    3. Substring match — keys ≥5 chars only.
-       If the query contains a geographic/subsidiary qualifier (e.g. "lietuva")
-       but the candidate key does not, the match is skipped so that
+    3. Substring match — keys ≥5 chars only, AND not in _EXACT_TICKER_KEYS.
+       Keys in _EXACT_TICKER_KEYS (short/ambiguous: tsmc, byd, kia, catl, …)
+       only resolve via passes 1–2 to avoid false-positive substring hits.
+       If the query contains a geographic qualifier (e.g. "lietuva") but the
+       candidate key does not, the match is skipped so that
        "Orlen Lietuva" never resolves to the PKN (parent) ticker.
     """
     if not name:
@@ -1093,7 +1173,7 @@ def _lookup_ticker(name: str) -> dict | None:
     # Build normalized view of the map (small dict, cheap)
     norm_map = {_normalize_company_name(k): v for k, v in TICKER_MAP.items()}
 
-    # Pass 1: exact normalized match
+    # Pass 1: exact normalized match (works for any length, including short keys)
     if query in norm_map:
         return norm_map[query]
 
@@ -1106,8 +1186,11 @@ def _lookup_ticker(name: str) -> dict | None:
     query_words = set(query.split())
     query_qualifiers = query_words & _SUBSIDIARY_QUALIFIERS
 
-    # Pass 3: substring match (keys ≥5 chars only)
+    # Pass 3: substring match — only long, unambiguous keys
     for key, value in norm_map.items():
+        # Never substring-match short/ambiguous keys
+        if key in _EXACT_TICKER_KEYS:
+            continue
         if len(key) < 5:
             continue
         # Subsidiary guard: skip if the query is qualified but the key is not,
