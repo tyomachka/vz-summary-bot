@@ -31,7 +31,9 @@ from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright
 RSS_URL = "https://www.vz.lt/rss"
 LOGIN_URL = "https://prisijungimas.vz.lt/verslo-zinios"
 HOMEPAGE = "https://www.vz.lt/"
-MAX_ARTICLES = 18
+MAX_ARTICLES_RSS = 70       # RSS items to consider per run
+MAX_ARTICLES_FETCH = 28     # article bodies to fetch (pre-scored top-N)
+MAX_ARTICLES = MAX_ARTICLES_FETCH  # backward-compat alias
 ARTICLE_FETCH_TIMEOUT_MS = 30_000
 GEMINI_MODEL = "gemini-2.5-flash"
 # Tried in order on sustained failures (503 / quota exhaustion).
@@ -806,13 +808,17 @@ LOW → skip or Watchlist:
 
 ═══════════════════════════════════════════
 STEP 5 — EVIDENCE SNIPPETS:
-• importance=high: provide 4–8 snippets. importance=medium: provide 2–4 snippets.
-• Each snippet: verbatim Lithuanian substring of THAT article's body. MAX 12 WORDS.
-• Prefer snippets with numbers; cover different facts (not variations of the same sentence).
+• Provide 3–6 snippets per item (importance=high may use up to 6).
+• Each snippet: verbatim Lithuanian substring of THAT article's body. 5–18 WORDS.
+• Prefer snippets containing a number, action, or concrete claim.
 • No paraphrasing, no translation, no full paragraphs.
-• If you cannot find ≥2 snippets, output item as low_relevance with skip_reason: "insufficient evidence".
-GOOD: "apie 200 mln. Eur Kairių"
-BAD:  "2026–2027 metais didieji projektai turės daug įtakos viso sektoriaus rodikliams..."
+• Reject one-word company names ("Nvidia") and vague fragments
+  ("duomenų centrų segmentas") — those are not evidence.
+• If you cannot find ≥2 meaningful snippets, output item as low_relevance with
+  skip_reason: "insufficient evidence".
+GOOD: "Ignitis grupės grynasis pelnas siekė 47 mln. eurų"
+BAD:  "Nvidia"  (just a company name, no claim)
+BAD:  "2026–2027 metais didieji projektai turės daug įtakos viso sektoriaus rodikliams..."  (paragraph)
 
 ═══════════════════════════════════════════
 STEP 6 — TICKERS (with roles):
@@ -900,7 +906,7 @@ Split the liveblog into individual timestamped entries. Output each as a subitem
 ═══════════════════════════════════════════
 HARD RULES (any violation = drop the item in Python):
 • url must exactly match the URL provided for that article.
-• Every evidence_lt snippet must be a verbatim substring of THAT article's body. ≤12 words.
+• Every evidence_lt snippet must be a verbatim substring of THAT article's body. 5-18 words.
 • Never output BUY / SELL / HOLD or analyst price targets or ratings.
 • Never invent tickers — list company names in candidate_companies exactly as written.
 • Two articles covering the same event → only one gets a full card.
@@ -915,7 +921,7 @@ JSON SCHEMA (one object per article):
   "confidence": "high|medium|low",
   "headline_en": "<≤12 words>",
   "brief_bullet": "<≤22 words, complete sentence, no ellipsis, number or market implication>",
-  "evidence_lt": ["<verbatim LT substring, ≤12 words, prefer numeric snippets>", ...],
+  "evidence_lt": ["<verbatim LT substring, 5-18 words, prefer numeric/action snippets>", ...],
   "market_read": "<2–3 EN sentences; numbers must appear in evidence_lt; no BUY/SELL/HOLD>",
   "candidate_companies": [{"name": "<as written>", "role": "direct|related|background|comparison_only|private"}, ...],
   "candidate_instruments": [{"name": "<instrument as mentioned>", "direction": "bullish|bearish|mixed|neutral|unclear"}],
@@ -972,14 +978,14 @@ def normalize_text(s: str) -> str:
 
 _DROP_TYPES = {"low_relevance", "sponsored_or_ad"}
 _IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
-_MAX_TOP = 6        # max cards in Top Signals (B)
-_MAX_WATCHLIST = 8  # max cards in Watchlist (D)
+_MAX_TOP = 8         # max cards in Top Signals (B)
+_MAX_WATCHLIST = 10  # max cards in Watchlist (D)
 
 # Score thresholds
-_SCORE_TOP = 60           # minimum score for Top Signals
-_SCORE_TOP_FALLBACK = 50  # pulled up when fewer than 4 items hit 60
-_SCORE_WATCH = 35         # minimum score for Watchlist
-_SCORE_BRIEF = 40         # minimum subitem score to appear in Executive Brief
+_SCORE_TOP = 55           # minimum score for Top Signals
+_SCORE_TOP_FALLBACK = 40  # pulled up when fewer than 4 items hit 55
+_SCORE_WATCH = 25         # minimum score for Watchlist
+_SCORE_BRIEF = 30         # minimum subitem score to appear in Executive Brief
 
 # Article type base scores
 _TYPE_SCORE: dict[str, int] = {
@@ -1007,6 +1013,42 @@ _TYPE_PENALTY: dict[str, int] = {
 
 # These article types should never lead Top Signals.
 _OPINION_TYPES = {"educational", "personal_finance", "market_overview"}
+
+# These article types bypass the minimum score threshold entirely and are always
+# included (in top_signals if score >= _SCORE_TOP, else watchlist).
+_OVERRIDE_INCLUDE_TYPES = {
+    "direct_public_company",
+    "macro_signal",
+    "commodity_signal",
+    "geopolitical_signal",
+}
+
+# Lithuanian/English keywords that boost pre-fetch priority score.
+_PRESCORE_KEYWORDS = {
+    "pelnas", "pajamos", "rezultatai", "dividendai", "akcija",  # earnings/dividends
+    "nasdaq", "vilnius", "baltic", "ipo", "spo", "listingas", "obligacij",  # Baltic listings
+    "nafta", "dujos", "elektra", "energija",  # energy LT
+    "ecb", "fed", "palukanos", "palūkanos", "infliacija", "bvp",  # macro LT
+    "sandoris", "susijungimas", "peremas", "perėmimas",  # M&A LT
+    "brent", "gold", "bitcoin", "btc", "ethereum",  # instruments
+    "earnings", "revenue", "profit", "ipo", "merger", "acquisition",  # EN
+    "recession", "inflation", "rate", "gdp", "unemployment",  # macro EN
+}
+
+# Compiled pattern for placeholder/hallucination detection in rendered text.
+_PLACEHOLDER_RE = re.compile(
+    r"\[N\]|\[X\]|\[Y\]|\bTBD\b|\bN/A\b|No numeric figure|placeholder|unknown value",
+    re.IGNORECASE,
+)
+
+
+def pre_score_article(item: dict) -> int:
+    """Quick title+description keyword score to prioritise which articles to fetch."""
+    text = (item.get("title", "") + " " + item.get("description", "")).lower()
+    score = 20 if item.get("section") in HIGH_TIER else 5
+    matched = sum(1 for kw in _PRESCORE_KEYWORDS if kw in text)
+    score += min(30, matched * 8)
+    return score
 
 
 def compute_investment_score(item: dict) -> int:
@@ -1290,16 +1332,19 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
 
         body_norm = normalize_text(a["body"])
 
-        # Evidence: trim to 12 words, verify substring in body, dedup, reject incomplete numerics
+        # Evidence: trim to 18 words, verify substring in body, dedup, reject fragments / numerics-only.
+        # Spec: 5-18 words, must be verbatim, prefer numeric / action snippets,
+        # reject one-word company names ("Nvidia") and vague fragments.
         snippets = [s for s in (item.get("evidence_lt") or []) if s]
-        trimmed = [" ".join(s.split()[:12]) for s in snippets]
+        trimmed = [" ".join(s.split()[:18]) for s in snippets]
         valid_snips = [s for s in trimmed if normalize_text(s) in body_norm]
         valid_snips = _dedup_snippets(valid_snips)
         valid_snips = [s for s in valid_snips if not _is_incomplete_numeric(s)]
+        valid_snips = [s for s in valid_snips if len(s.split()) >= 4]  # min 4 words
         if len(valid_snips) < 2 and not item.get("is_liveblog"):
             _skip(item, "fewer than 2 evidence snippets verified in body")
             continue
-        item["evidence_lt"] = valid_snips[:8]
+        item["evidence_lt"] = valid_snips[:6]
 
         # Ticker resolution — candidate_companies is now list of {name, role} objects
         public, companies_private, tickers_unclear = [], [], []
@@ -1370,6 +1415,11 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
 
         # Number contamination check: numbers in brief_bullet/market_read must be in evidence
         _validate_numbers_against_evidence(item)
+
+        # Reject items whose free-text fields contain placeholder tokens after fixing
+        for field in ("brief_bullet", "market_read"):
+            if _PLACEHOLDER_RE.search(item.get(field) or ""):
+                item[field] = ""  # strip the offending field rather than drop the item
 
         passed.append(item)
 
@@ -1454,9 +1504,17 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         below_top.append(item)
     below_top.sort(key=lambda x: -x["investment_score"])
 
-    # Build watchlist from remaining items scoring >= _SCORE_WATCH, in score order
-    watchlist = [i for i in below_top if i["investment_score"] >= _SCORE_WATCH]
-    skipped_low = [i for i in below_top if i["investment_score"] < _SCORE_WATCH]
+    # Build watchlist: score >= _SCORE_WATCH OR override type with importance high/medium
+    watchlist = []
+    skipped_low = []
+    for item in below_top:
+        a_type = (item.get("article_type") or "").lower()
+        imp = (item.get("importance") or "").lower()
+        override = a_type in _OVERRIDE_INCLUDE_TYPES and imp in {"high", "medium"}
+        if item["investment_score"] >= _SCORE_WATCH or override:
+            watchlist.append(item)
+        else:
+            skipped_low.append(item)
 
     for item in skipped_low:
         _skip(item, f"score {item['investment_score']} below threshold {_SCORE_WATCH}")
@@ -1598,116 +1656,147 @@ def _badge(text: str, color: str) -> str:
 
 
 def _render_card(item: dict) -> str:
+    """Full card for Top Signals (B). Structured: header / evidence / market read / impact / tickers."""
     a_type = _esc((item.get("article_type") or "other").replace("_", " ").upper())
     importance = _esc((item.get("importance") or "—").upper())
     confidence = _esc(item.get("confidence") or "—")
-    liveblog = (' · <strong style="color:#cf222e">🔴 LIVEBLOG</strong>'
-                if item.get("is_liveblog") else "")
+    score = item.get("investment_score", "?")
+    liveblog_tag = ' · <span style="color:#cf222e;font-weight:700">LIVEBLOG</span>' if item.get("is_liveblog") else ""
 
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
+    market_read = (item.get("market_read") or "").strip()
 
-    snips = (item.get("evidence_lt") or [])[:8]
-    ev_items = "".join(
-        f'<div style="margin:3px 0">• "{_esc(s)}"</div>' for s in snips
+    snips = (item.get("evidence_lt") or [])[:6]
+    ev_html = "".join(
+        f'<div style="margin:3px 0;font-size:12px;color:#8c959f;font-style:italic">'
+        f'&ldquo;{_esc(s)}&rdquo;</div>'
+        for s in snips
     )
 
-    public = item.get("public_tickers") or []
+    fund = (item.get("signal_fundamental") or "unclear").lower()
+    trade = (item.get("tradability") or "watch-only").lower()
+
+    public_direct = [p for p in (item.get("public_tickers") or []) if (p.get("role") or "direct").lower() == "direct"]
+    public_related = [p for p in (item.get("public_tickers") or []) if (p.get("role") or "direct").lower() != "direct"]
     priv = item.get("companies_private") or []
-    unclear = item.get("tickers_unclear") or []
     proxies = item.get("ticker_proxies") or []
 
-    def _ticker_label(p: dict) -> str:
+    sectors = [x for x in (item.get("affected_indirect") or []) if x]
+    instr_names = [ri.get("display", ri.get("symbol", "")) for ri in (item.get("resolved_instruments") or [])]
+
+    def _ticker_chip(p: dict) -> str:
         role = (p.get("role") or "direct").lower()
-        role_suffix = (
-            f' <span style="font-size:10px;color:#9a6700;font-weight:400">[{_esc(role)}]</span>'
+        role_tag = (
+            f' <span style="font-size:10px;color:#9a6700">[{_esc(role)}]</span>'
             if role != "direct" else ""
         )
         return (
-            f'<strong>{_esc(p["ticker"])}</strong>'
-            f'<span style="color:#8c959f"> ({_esc(p["exchange"])})</span>'
-            f'{role_suffix}'
+            f'<span style="margin-right:10px;white-space:nowrap">'
+            f'<strong style="color:#4493f8">{_esc(p["ticker"])}</strong>'
+            f'<span style="color:#8c959f;font-size:11px"> {_esc(p.get("exchange",""))}</span>'
+            f'{role_tag}</span>'
         )
 
-    tickers_verified = (", ".join(_ticker_label(p) for p in public) if public else "—")
+    tickers_html = "".join(_ticker_chip(p) for p in public_direct) or "—"
 
-    fund = (item.get("signal_fundamental") or "unclear").lower()
-    react = (item.get("signal_market_reaction") or "unknown").lower()
-    trade = (item.get("tradability") or "watch-only").lower()
+    def _impact_row(label: str, items_: list, color: str = "#cdd0d4") -> str:
+        if not items_:
+            return ""
+        content = ", ".join(_esc(str(x)) for x in items_[:6])
+        return (
+            f'<div style="margin:3px 0;font-size:12px">'
+            f'<span style="color:#8c959f;min-width:170px;display:inline-block">{label}:</span>'
+            f'<span style="color:{color}">{content}</span></div>'
+        )
 
-    affected_parts = []
-    direct = item.get("affected_direct")
-    indirect = item.get("affected_indirect")
-    if direct:
-        affected_parts.append(f'<strong>Direct:</strong> {_join(direct)}')
-    if indirect:
-        affected_parts.append(f'<strong>Indirect:</strong> {_join(indirect)}')
-    affected_html = (' &nbsp;|&nbsp; '.join(affected_parts)) if affected_parts else "—"
+    impact_html = (
+        _impact_row("Direction", [fund], _FUND_COLORS.get(fund, "#57606a"))
+        + _impact_row("Tradability", [trade], _TRADE_COLORS.get(trade, "#57606a"))
+        + _impact_row("Direct companies", [p["name"] for p in public_direct if p.get("name")])
+        + _impact_row("Related public", [p["name"] for p in public_related if p.get("name")])
+        + _impact_row("Private companies", [p.get("name", "?") for p in priv])
+        + _impact_row("Sectors / themes", sectors)
+        + _impact_row("Instruments / indexes", instr_names)
+    )
 
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
-        f'margin:0 0 16px;font-family:{_F};max-width:680px">'
-
-        # header: type · importance · conf + headline + evidence
-        f'<div style="border-bottom:1px dashed #444c56;padding-bottom:12px;margin-bottom:14px">'
+        f'margin:0 0 18px;font-family:{_F};max-width:680px">'
         f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-        f'letter-spacing:.5px;margin-bottom:6px">📰 {a_type} · {importance} · '
-        f'score:{item.get("investment_score", "?")} · conf:{confidence}{liveblog}</div>'
-        f'<div style="margin:0 0 10px;font-size:15px;font-weight:600;line-height:1.35">'
+        f'letter-spacing:.5px;margin-bottom:6px">'
+        f'{a_type} · {importance} · conf:{confidence} · score:{score}{liveblog_tag}</div>'
+        f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:12px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
-        + (f'<div style="padding:8px 12px;border-left:3px solid #444c56;'
-           f'color:#8c959f;font-size:13px;font-style:italic">{ev_items}</div>'
-           if ev_items else '')
-        + '</div>'
-
-        # body
-        + _row("🌐", "Market read", _esc(item.get("market_read") or ""))
-        + f'<div style="margin:0 0 9px;font-size:13px;line-height:1.8">'
-          f'<strong>📈 Signal:</strong> '
-          + _badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
-          + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#8c959f"))
-          + _badge(f"Tradability: {trade}", _TRADE_COLORS.get(trade, "#57606a"))
-          + '</div>'
-        + _row("🎯", "Affected", affected_html)
-        + _row("📊", "Tickers", tickers_verified)
-        + (_row("🏢", "Private", _join(p.get("name", "?") for p in priv)) if priv else "")
-        + (_row("❓", "Ticker unclear", _join(u.get("name", "?") for u in unclear)) if unclear else "")
-        + (_row("🔭", "Proxies", _join(proxies)) if proxies else "")
-        + '</div>'
+        + (
+            f'<div style="margin-bottom:12px">'
+            f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+            f'letter-spacing:.4px;margin-bottom:4px">Evidence</div>'
+            f'<div style="padding:8px 12px;border-left:3px solid #444c56">{ev_html}</div></div>'
+            if ev_html else ""
+        )
+        + (
+            f'<div style="margin-bottom:12px">'
+            f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+            f'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
+            f'<div style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</div></div>'
+            if market_read else ""
+        )
+        + (
+            f'<div style="margin-bottom:10px;padding:10px 12px;background:#161b22;'
+            f'border-radius:6px">'
+            f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+            f'letter-spacing:.4px;margin-bottom:6px">Impact</div>'
+            + impact_html
+            + "</div>"
+            if impact_html else ""
+        )
+        + (
+            f'<div style="font-size:12px">'
+            f'<span style="color:#8c959f;text-transform:uppercase;font-size:11px;'
+            f'letter-spacing:.4px">Tickers: </span>{tickers_html}'
+            + (f' &nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>' if proxies else "")
+            + "</div>"
+        )
+        + "</div>"
     )
 
 
 def _render_watchlist_row(item: dict) -> str:
-    """Compact card for section D (Watchlist): brief bullet + 2-4 evidence snippets."""
-    importance = (item.get("importance") or "medium").upper()
+    """Compact card for Watchlist (D): headline + 2-4 evidence snippets, no brief duplication."""
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
-    a_type = _esc((item.get("article_type") or "").replace("_", " "))
+    a_type = _esc((item.get("article_type") or "").replace("_", " ").upper())
     brief = _esc(item.get("brief_bullet") or "")
+    headline_norm = (item.get("headline_en") or "").strip().lower()
+    brief_norm = (item.get("brief_bullet") or "").strip().lower().rstrip(".")
+    # Suppress brief if it is essentially the headline
+    if brief_norm and (brief_norm == headline_norm or brief_norm.startswith(headline_norm[:30])):
+        brief = ""
+
     fund = (item.get("signal_fundamental") or "neutral").lower()
     trade = (item.get("tradability") or "watch-only").lower()
+    score = item.get("investment_score", "")
     color = _FUND_COLORS.get(fund, "#57606a")
 
     snips = (item.get("evidence_lt") or [])[:4]
-    ev_items = "".join(
-        f'<div style="margin:2px 0;font-size:12px;color:#8c959f;font-style:italic">• "{_esc(s)}"</div>'
+    ev_html = "".join(
+        f'<div style="margin:2px 0;font-size:11px;color:#8c959f;font-style:italic">'
+        f'&ldquo;{_esc(s)}&rdquo;</div>'
         for s in snips
     )
 
     return (
-        f'<div style="border-left:3px solid #444c56;padding:8px 12px;'
+        f'<div style="border-left:3px solid #30363d;padding:8px 14px;'
         f'margin:0 0 10px;font-family:{_F}">'
-        f'<div style="font-size:11px;color:#8c959f;margin-bottom:3px">'
-        f'{importance} · {_esc(a_type)}</div>'
+        f'<div style="font-size:11px;color:#8c959f;margin-bottom:2px">'
+        f'{a_type} · score:{score}</div>'
         f'<div style="font-size:14px;font-weight:600;margin-bottom:4px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
-        + (f'<div style="font-size:13px;color:#cdd0d4;margin-bottom:5px">{brief}</div>' if brief else '')
-        + (f'<div style="padding:4px 8px;border-left:2px solid #30363d;margin-bottom:5px">{ev_items}</div>'
-           if ev_items else '')
-        + f'<div style="margin-top:4px">'
-        + _badge(fund, color)
-        + _badge(trade, _TRADE_COLORS.get(trade, "#57606a"))
-        + '</div></div>'
+        + (f'<div style="font-size:13px;color:#cdd0d4;margin-bottom:5px">{brief}</div>' if brief else "")
+        + (f'<div style="margin-bottom:5px">{ev_html}</div>' if ev_html else "")
+        + f'<div>{_badge(fund, color)}{_badge(trade, _TRADE_COLORS.get(trade, "#57606a"))}</div>'
+        + "</div>"
     )
 
 
@@ -1813,108 +1902,87 @@ _DIR_COLORS = {
 
 
 def _render_instruments_section(instruments: list[dict]) -> str:
-    """Render Market Instruments mini-cards (one per resolved instrument)."""
+    """Compact 5-column table: Instrument · Class · Direction · Evidence · Relevance."""
     if not instruments:
         return ""
-    parts: list[str] = []
+
+    rows: list[str] = []
     for instr in instruments:
         display = _esc(instr.get("display") or instr.get("symbol") or "")
         symbol = _esc(instr.get("symbol") or "")
         asset_class = instr.get("asset_class") or ""
         ac_label = _ASSET_CLASS_LABELS.get(asset_class, asset_class.replace("_", " ").title())
-        direction = (instr.get("direction") or "unclear").lower()
         unit = instr.get("unit") or ""
+        direction = (instr.get("direction") or "unclear").lower()
         evidence_arts = instr.get("evidence_articles") or []
 
-        # Collect unique evidence snippets and market_read across contributing articles
-        all_evidence: list[str] = []
-        seen_ev: set[str] = set()
-        market_reads: list[str] = []
-        affected_direct_all: list[str] = []
-        affected_indirect_all: list[str] = []
-        article_links: list[str] = []
-        for art in evidence_arts:
-            for snip in (art.get("evidence_lt") or []):
-                norm = " ".join(snip.split()).lower()
-                if norm not in seen_ev:
-                    seen_ev.add(norm)
-                    all_evidence.append(snip)
-            mr = (art.get("market_read") or "").strip()
-            if mr and mr not in market_reads:
-                market_reads.append(mr)
-            for d in (art.get("affected_direct") or []):
-                if d not in affected_direct_all:
-                    affected_direct_all.append(d)
-            for d in (art.get("affected_indirect") or []):
-                if d not in affected_indirect_all:
-                    affected_indirect_all.append(d)
+        first_snip = ""
+        source_link = ""
+        relevance = ""
+        for art in evidence_arts[:1]:
+            snips = art.get("evidence_lt") or []
+            if snips:
+                first_snip = snips[0]
             url = art.get("url") or ""
-            headline = art.get("headline_en") or ""
-            if url and headline:
-                article_links.append(
+            hl = art.get("headline_en") or ""
+            if url and hl:
+                short = hl[:55] + ("…" if len(hl) > 55 else "")
+                source_link = (
                     f'<a href="{_esc(url)}" style="color:#4493f8;text-decoration:none">'
-                    f'{_esc(headline)}</a>'
+                    f'{_esc(short)}</a>'
                 )
+            mr = (art.get("market_read") or "").strip()
+            if mr:
+                first_sent = mr.split(".")[0].strip()
+                words = first_sent.split()[:18]
+                relevance = " ".join(words)
+                if relevance and not relevance.endswith("."):
+                    relevance += "."
 
-        ev_html = "".join(
-            f'<div style="margin:2px 0">• &ldquo;{_esc(s)}&rdquo;</div>'
-            for s in all_evidence[:5]
+        dir_color = _DIR_COLORS.get(direction, "#8c959f")
+        # Instrument cell: clean separators between display / symbol / unit
+        label_bits = [f'<strong style="color:#cdd0d4">{display}</strong>']
+        if symbol and symbol != display:
+            label_bits.append(f'<span style="color:#8c959f;font-size:11px">{symbol}</span>')
+        if unit:
+            label_bits.append(f'<span style="color:#8c959f;font-size:11px">{_esc(unit)}</span>')
+        instrument_cell = ' <span style="color:#8c959f">·</span> '.join(label_bits)
+
+        rows.append(
+            '<tr style="border-bottom:1px solid #30363d;vertical-align:top">'
+            f'<td style="padding:7px 8px;white-space:nowrap">{instrument_cell}</td>'
+            f'<td style="padding:7px 8px;white-space:nowrap">{_badge(ac_label, "#0969da")}</td>'
+            f'<td style="padding:7px 8px;white-space:nowrap">{_badge(direction, dir_color)}</td>'
+            '<td style="padding:7px 8px;font-size:12px;color:#8c959f;font-style:italic">'
+            + (f'&ldquo;{_esc(first_snip)}&rdquo;' if first_snip else "")
+            + '</td>'
+            '<td style="padding:7px 8px;font-size:12px;color:#cdd0d4">'
+            + _esc(relevance)
+            + (f'<br/><span style="font-size:11px">{source_link}</span>' if source_link else "")
+            + '</td>'
+            '</tr>'
         )
-        affected_parts: list[str] = []
-        if affected_direct_all:
-            affected_parts.append(
-                f'<strong>Direct:</strong> {_join(affected_direct_all[:4])}'
-            )
-        if affected_indirect_all:
-            affected_parts.append(
-                f'<strong>Indirect:</strong> {_join(affected_indirect_all[:4])}'
-            )
-        affected_html = " &nbsp;|&nbsp; ".join(affected_parts) if affected_parts else ""
 
-        parts.append(
-            f'<div style="border:1px solid #444c56;border-radius:6px;padding:12px 16px;'
-            f'margin:0 0 12px;font-family:{_F};max-width:680px">'
-            # header row
-            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;'
-            f'flex-wrap:wrap">'
-            f'<span style="font-size:14px;font-weight:700;color:#cdd0d4">{display}</span>'
-            f'<span style="font-size:11px;color:#8c959f">{symbol}</span>'
-            + (f'<span style="font-size:11px;color:#8c959f">{_esc(unit)}</span>' if unit else "")
-            + _badge(ac_label, "#0969da")
-            + _badge(direction, _DIR_COLORS.get(direction, "#8c959f"))
-            + "</div>"
-            # evidence
-            + (
-                f'<div style="padding:6px 10px;border-left:3px solid #30363d;'
-                f'color:#8c959f;font-size:12px;font-style:italic;margin-bottom:8px">'
-                + ev_html + "</div>"
-                if ev_html else ""
-            )
-            # market read (first contributing article's)
-            + (
-                f'<div style="font-size:13px;color:#cdd0d4;margin-bottom:8px">'
-                f'<strong>Why it matters:</strong> {_esc(market_reads[0])}</div>'
-                if market_reads else ""
-            )
-            # affected sectors / companies
-            + (
-                f'<div style="font-size:12px;color:#8c959f;margin-bottom:6px">'
-                f'<strong>Affected:</strong> {affected_html}</div>'
-                if affected_html else ""
-            )
-            # source article links
-            + (
-                f'<div style="font-size:11px;color:#8c959f">'
-                + " · ".join(article_links[:2])
-                + "</div>"
-                if article_links else ""
-            )
-            + "</div>"
-        )
-    return "".join(parts)
+    if not rows:
+        return ""
+
+    header = (
+        '<tr style="border-bottom:1px solid #444c56">'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">INSTRUMENT</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">CLASS</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">DIRECTION</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">EVIDENCE</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">RELEVANCE</th>'
+        '</tr>'
+    )
+    return (
+        f'<table style="width:100%;border-collapse:collapse;font-family:{_F};'
+        f'font-size:13px;max-width:680px">'
+        + header + "".join(rows) + "</table>"
+    )
 
 
-def render_html(result: dict, today: dt.date) -> str:
+def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
     top_signals: list[dict] = result.get("top_signals") or []
     watchlist: list[dict] = result.get("watchlist") or []
     liveblogs: list[dict] = result.get("liveblogs") or []
@@ -1933,37 +2001,41 @@ def render_html(result: dict, today: dt.date) -> str:
     parts = [
         f'<div style="{wrap}">',
         f'<div style="font-size:12px;color:#8c959f;margin-bottom:20px;font-family:{_F}">'
-        f'Investment Brief · {today.isoformat()} · {len(top_signals)} signals · '
-        f'{len(watchlist)} watchlist</div>',
+        f'Investment Brief · {today.isoformat()} · '
+        f'{len(top_signals)} top signals · {len(watchlist)} watchlist · '
+        f'{len(liveblogs)} day-pulse</div>',
     ]
 
-    # ── A · Executive Brief ───────────────────────────────────────────
-    # Source: top 6 highest-scoring items across Top Signals + Watchlist + important liveblogs.
-    brief_pool: list[dict] = sorted(
-        top_signals + watchlist,
+    # ── A · Executive Brief — dedup against headline-only repeats ─────
+    brief_pool = sorted(top_signals + watchlist, key=lambda x: -x.get("investment_score", 0))
+    lb_brief_sorted = sorted(
+        [s for s in liveblogs if s.get("investment_score", 0) >= _SCORE_BRIEF],
         key=lambda x: -x.get("investment_score", 0),
     )
-    # Also include high-scoring liveblog subitems (score >= _SCORE_BRIEF)
-    lb_brief = [s for s in liveblogs if s.get("investment_score", 0) >= _SCORE_BRIEF]
-    lb_brief_sorted = sorted(lb_brief, key=lambda x: -x.get("investment_score", 0))
 
-    bullets = []
-    used_lb = 0
-    for item in brief_pool[:6]:
+    bullets: list[str] = []
+    seen_bullets: set[str] = set()
+    for item in brief_pool[:10]:
         b = (item.get("brief_bullet") or "").strip()
         if not b:
             fallback = (item.get("market_read") or item.get("headline_en") or "").strip()
             words = fallback.split()[:22]
-            b = " ".join(words)
-            if not b.endswith("."):
-                b = b.rstrip(",;") + "."
-        bullets.append(b)
-    # Fill up to 6 from important liveblogs if brief_pool produced fewer
+            b = " ".join(words).rstrip(",;")
+            if b and not b.endswith("."):
+                b += "."
+        norm = b.lower()[:60]
+        if b and norm not in seen_bullets:
+            seen_bullets.add(norm)
+            bullets.append(b)
+        if len(bullets) >= 10:
+            break
     for sub in lb_brief_sorted:
-        if len(bullets) >= 6:
+        if len(bullets) >= 10:
             break
         h = (sub.get("headline_en") or "").strip()
-        if h:
+        norm = h.lower()[:60]
+        if h and norm not in seen_bullets:
+            seen_bullets.add(norm)
             bullets.append(h if h.endswith(".") else h + ".")
 
     if bullets:
@@ -1977,40 +2049,40 @@ def render_html(result: dict, today: dt.date) -> str:
             f'<li style="margin:9px 0;font-size:14px;line-height:1.5">{_esc(b)}</li>'
             for b in bullets
         )
-        parts.append('</ul></div>')
+        parts.append("</ul></div>")
 
     # ── B · Top Signals ───────────────────────────────────────────────
     if top_signals:
         parts.append(f'<h2 style="{h2s}">B · Top Signals</h2>')
         parts.extend(_render_card(c) for c in top_signals)
 
-    # ── C · Direct Public Tickers ─────────────────────────────────────
-    ticker_table = _render_tickers_table(top_signals + watchlist)
-    if ticker_table:
-        parts.append(f'<h2 style="{h2s}">C · Direct Public Tickers</h2>')
-        parts.append(ticker_table)
-
-    # ── C2 · Market Instruments ───────────────────────────────────────
-    instr_html = _render_instruments_section(instruments)
-    if instr_html:
-        parts.append(f'<h2 style="{h2s}">C2 · Market Instruments</h2>')
-        parts.append(instr_html)
-
-    # ── D · Macro / Sector / Private Watchlist ────────────────────────
-    if watchlist:
-        parts.append(f'<h2 style="{h2s}">D · Macro / Sector / Private Watchlist</h2>')
-        parts.extend(_render_watchlist_row(i) for i in watchlist)
-
-    # ── E · Dienos Pulsas / Live Market Updates ──────────────────────
+    # ── C · Day Pulse (liveblog subitems) ─────────────────────────────
     if liveblogs:
-        parts.append(f'<h2 style="{h2s}">E · Dienos Pulsas / Live Market Updates</h2>')
+        parts.append(f'<h2 style="{h2s}">C · Day Pulse</h2>')
         parts.append(f'<div style="font-family:{_F}">')
         parts.extend(_render_liveblog_row(s) for s in liveblogs)
-        parts.append('</div>')
+        parts.append("</div>")
 
-    # ── F · Skipped / Low Relevance ───────────────────────────────────
-    if skipped:
-        parts.append(f'<h2 style="{h2s}">F · Skipped / Low Relevance</h2>')
+    # ── D · Watchlist ─────────────────────────────────────────────────
+    if watchlist:
+        parts.append(f'<h2 style="{h2s}">D · Watchlist</h2>')
+        parts.extend(_render_watchlist_row(i) for i in watchlist)
+
+    # ── E · Direct Public Tickers (table only) ────────────────────────
+    ticker_table = _render_tickers_table(top_signals + watchlist)
+    if ticker_table:
+        parts.append(f'<h2 style="{h2s}">E · Direct Public Tickers</h2>')
+        parts.append(ticker_table)
+
+    # ── F · Market Instruments (compact table) ────────────────────────
+    instr_html = _render_instruments_section(instruments)
+    if instr_html:
+        parts.append(f'<h2 style="{h2s}">F · Market Instruments</h2>')
+        parts.append(instr_html)
+
+    # ── G · Debug footer (off by default) ─────────────────────────────
+    if show_debug and skipped:
+        parts.append(f'<h2 style="{h2s}">G · Skipped / Low Relevance</h2>')
         parts.append(
             f'<div style="font-family:{_F};font-size:12px;color:#8c959f;'
             f'padding:10px 14px;border:1px solid #30363d;border-radius:6px">'
@@ -2020,7 +2092,7 @@ def render_html(result: dict, today: dt.date) -> str:
                 f'<div style="margin:3px 0">— <em>{_esc(s.get("headline_en","—"))}</em>'
                 f' · {_esc(s.get("reason",""))}</div>'
             )
-        parts.append('</div>')
+        parts.append("</div>")
 
     parts.append('</div>')
     return "".join(parts)
@@ -2116,16 +2188,20 @@ def run() -> None:
     rss_items = fetch_rss(since=last_run)
     print(f"RSS items since last run: {len(rss_items)}")
 
+    # Cap RSS pool so we don't blow up on long backfills
+    rss_items = rss_items[:MAX_ARTICLES_RSS]
+
     high, conditional, _skip = tier_filter(rss_items)
     print(f"High-tier: {len(high)} | Conditional: {len(conditional)}")
 
-    # Note: conditional articles flow straight into extraction; the Gemini
-    # extraction prompt classifies and discards low-relevance items.
-
-    candidates = (high + conditional)
-    candidates.sort(key=lambda x: x["published"], reverse=True)
-    candidates = candidates[:MAX_ARTICLES]
-    print(f"Selected {len(candidates)} articles for full extraction")
+    # Pre-score every candidate by section + LT/EN keywords, then take top N for fetch.
+    candidates = high + conditional
+    for c in candidates:
+        c["_prescore"] = pre_score_article(c)
+    candidates.sort(key=lambda x: (-x["_prescore"], -x["published"].timestamp()))
+    candidates = candidates[:MAX_ARTICLES_FETCH]
+    top_pre = [c.get("_prescore", 0) for c in candidates[:5]]
+    print(f"Pre-scored: selected {len(candidates)} for fetch (top scores={top_pre})")
 
     if not candidates:
         send_email(
