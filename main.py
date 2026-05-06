@@ -1296,6 +1296,13 @@ def _lookup_instrument(name: str) -> dict | None:
     return None
 
 
+def _has_investable_instrument(item: dict) -> bool:
+    """True if item has at least one directly investable market-facing instrument."""
+    direct_tickers = [p for p in (item.get("public_tickers") or [])
+                      if (p.get("role") or "direct").lower() == "direct"]
+    return bool(direct_tickers or item.get("resolved_instruments"))
+
+
 def _theme_key(item: dict) -> str:
     """Group items by primary entity for theme-based dedup."""
     entity = ((item.get("affected_direct") or [""])[0]).strip().lower()[:40]
@@ -1479,10 +1486,19 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
     non_liveblogs.sort(key=lambda x: (-x["investment_score"], 0 if x.get("is_baltic") else 1))
 
     # ── Pass 6: score-based section assignment ────────────────────────
-    top_candidates = [i for i in non_liveblogs if i["investment_score"] >= _SCORE_TOP]
-    below_top = [i for i in non_liveblogs if i["investment_score"] < _SCORE_TOP]
+    # Top Signals gate: HIGH importance + investable instrument + score >= threshold
+    top_candidates = []
+    below_top = []
+    for i in non_liveblogs:
+        imp = (i.get("importance") or "").lower()
+        if (i["investment_score"] >= _SCORE_TOP
+                and imp == "high"
+                and _has_investable_instrument(i)):
+            top_candidates.append(i)
+        else:
+            below_top.append(i)
 
-    # Enforce 4-8 evidence snippets for Top Signal candidates; demote if insufficient
+    # Enforce ≥4 evidence snippets for Top Signal candidates; demote if insufficient
     top_signals_pre: list[dict] = []
     for item in top_candidates:
         if len(item.get("evidence_lt") or []) < 4:
@@ -1493,12 +1509,16 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
             top_signals_pre.append(item)
     below_top.sort(key=lambda x: -x["investment_score"])
 
-    # Fallback: if fewer than 4 reach _SCORE_TOP, pull up items >= _SCORE_TOP_FALLBACK
+    # Fallback: if fewer than 4 qualify, pull up HIGH+instrument items >= fallback threshold
     if len(top_signals_pre) < 4:
         for item in below_top[:]:
             if len(top_signals_pre) >= 4:
                 break
-            if item["investment_score"] >= _SCORE_TOP_FALLBACK and len(item.get("evidence_lt") or []) >= 2:
+            imp = (item.get("importance") or "").lower()
+            if (item["investment_score"] >= _SCORE_TOP_FALLBACK
+                    and imp == "high"
+                    and _has_investable_instrument(item)
+                    and len(item.get("evidence_lt") or []) >= 2):
                 top_signals_pre.append(item)
                 below_top.remove(item)
                 print(f"  pulled to top (fallback ≥{_SCORE_TOP_FALLBACK}): {item.get('headline_en')}")
@@ -1534,7 +1554,10 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
     total_passing = len(top_signals) + len(watchlist)
     if total_passing >= 3 and len(top_signals) < 2:
         for item in list(watchlist):
-            if item["investment_score"] >= _SCORE_TOP_FALLBACK:
+            imp = (item.get("importance") or "").lower()
+            if (item["investment_score"] >= _SCORE_TOP_FALLBACK
+                    and imp == "high"
+                    and _has_investable_instrument(item)):
                 top_signals.append(item)
                 watchlist.remove(item)
                 print(f"  promoted to top_signals (rule 10): {item.get('headline_en')}")
@@ -1661,21 +1684,103 @@ def _badge(text: str, color: str) -> str:
             f'margin-right:5px;white-space:nowrap">{_esc(text)}</span>')
 
 
-def _render_card(item: dict) -> str:
-    """Full card for Top Signals (B). Structured: header / evidence / badges / market read / entity rows / tickers."""
-    a_type = _esc((item.get("article_type") or "other").replace("_", " ").upper())
-    importance = _esc((item.get("importance") or "—").upper())
-    confidence = _esc(item.get("confidence") or "—")
-    score = item.get("investment_score", "?")
-    liveblog_tag = ' · <span style="color:#cf222e;font-weight:700">LIVEBLOG</span>' if item.get("is_liveblog") else ""
+_TYPE_READABLE: dict[str, str] = {
+    "direct_public_company": "Direct public company",
+    "private_company": "Private company",
+    "sector_signal": "Sector signal",
+    "macro_signal": "Macro signal",
+    "commodity_signal": "Commodity signal",
+    "geopolitical_signal": "Geopolitical signal",
+    "regulation_policy": "Regulation / policy",
+    "market_overview": "Market overview",
+    "educational": "Educational",
+    "personal_finance": "Personal finance",
+}
 
+_ASSET_CLASS_SHORT: dict[str, str] = {
+    "equity_index": "Index",
+    "volatility_index": "Vol Index",
+    "commodity": "Commodity",
+    "fx": "FX",
+    "rates": "Rates",
+    "crypto": "Crypto",
+    "etf": "ETF",
+}
+
+
+def _card_instrument_class(item: dict) -> str:
+    """Derive a short instrument class label for the metadata row."""
+    a_type = (item.get("article_type") or "").lower()
+    if a_type == "direct_public_company":
+        return "Stock"
+    if a_type == "commodity_signal":
+        return "Commodity"
+    instruments = item.get("resolved_instruments") or []
+    classes: list[str] = []
+    seen: set[str] = set()
+    for r in instruments[:2]:
+        ac = r.get("asset_class", "")
+        label = _ASSET_CLASS_SHORT.get(ac, "")
+        if label and label not in seen:
+            classes.append(label)
+            seen.add(label)
+    return " / ".join(classes)
+
+
+def _format_card_meta(item: dict) -> str:
+    """Human-readable metadata line: type · instrument class · confidence."""
+    a_type = (item.get("article_type") or "other").lower()
+    type_label = _TYPE_READABLE.get(a_type, a_type.replace("_", " ").title())
+    instr_class = _card_instrument_class(item)
+    conf = (item.get("confidence") or "").lower()
+    conf_label = {
+        "high": "High confidence",
+        "medium": "Medium confidence",
+        "low": "Low confidence",
+    }.get(conf, "")
+    parts = [_esc(type_label)]
+    if instr_class:
+        parts.append(_esc(instr_class))
+    if conf_label:
+        parts.append(_esc(conf_label))
+    meta = " · ".join(parts)
+    if item.get("is_liveblog"):
+        meta += ' · <span style="color:#cf222e;font-weight:700">LIVEBLOG</span>'
+    return meta
+
+
+def _fallback_market_read(item: dict) -> str:
+    """Construct a minimal market read when Gemini didn't provide one."""
+    brief = (item.get("brief_bullet") or "").strip()
+    headline = (item.get("headline_en") or "").strip()
+    brief_norm = brief.lower().rstrip(".")
+    headline_norm = headline.lower().rstrip(".")
+    # Use brief_bullet if substantively different from headline
+    if brief and not headline_norm.startswith(brief_norm[:35]):
+        return brief if brief.endswith(".") else brief + "."
+    # Append key entity names to headline
+    direct = [p["name"] for p in (item.get("public_tickers") or [])
+              if p.get("name") and (p.get("role") or "direct").lower() == "direct"]
+    instruments = [r.get("display", "") for r in (item.get("resolved_instruments") or [])
+                   if r.get("display")]
+    entities = (direct + instruments)[:2]
+    if entities and headline:
+        return f"{headline} — affects {', '.join(entities)}."
+    return headline if headline.endswith(".") else headline + "."
+
+
+def _render_card(item: dict) -> str:
+    """Top Signal card: metadata / headline / Market Read / evidence / badges / entities / tickers."""
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
     market_read = (item.get("market_read") or "").strip()
+    if not market_read:
+        market_read = _fallback_market_read(item)
 
-    snips = (item.get("evidence_lt") or [])[:6]
+    # Evidence: 5 snippets max for top signals
+    snips = (item.get("evidence_lt") or [])[:5]
     ev_html = "".join(
-        f'<div style="margin:3px 0;font-size:12px;color:#8c959f;font-style:italic">'
+        f'<div style="margin:3px 0;font-size:12px;color:#8c959f;font-style:italic;line-height:1.4">'
         f'&ldquo;{_esc(s)}&rdquo;</div>'
         for s in snips
     )
@@ -1684,46 +1789,44 @@ def _render_card(item: dict) -> str:
     react = (item.get("signal_market_reaction") or "unknown").lower()
     trade = (item.get("tradability") or "watch-only").lower()
 
-    public_direct = [p for p in (item.get("public_tickers") or []) if (p.get("role") or "direct").lower() == "direct"]
-    public_related = [p for p in (item.get("public_tickers") or []) if (p.get("role") or "direct").lower() != "direct"]
+    public_direct = [p for p in (item.get("public_tickers") or [])
+                     if (p.get("role") or "direct").lower() == "direct"]
+    public_related = [p for p in (item.get("public_tickers") or [])
+                      if (p.get("role") or "direct").lower() != "direct"]
     priv = item.get("companies_private") or []
     proxies = item.get("ticker_proxies") or []
-
     sectors = [x for x in (item.get("affected_indirect") or []) if x]
-    instr_names = [ri.get("display", ri.get("symbol", "")) for ri in (item.get("resolved_instruments") or [])]
+    instr_names = [ri.get("display", ri.get("symbol", ""))
+                   for ri in (item.get("resolved_instruments") or [])]
 
     def _ticker_chip(p: dict) -> str:
         role = (p.get("role") or "direct").lower()
-        role_tag = (
-            f' <span style="font-size:10px;color:#9a6700">[{_esc(role)}]</span>'
-            if role != "direct" else ""
-        )
-        return (
-            f'<span style="margin-right:10px;white-space:nowrap">'
-            f'<strong style="color:#4493f8">{_esc(p["ticker"])}</strong>'
-            f'<span style="color:#8c959f;font-size:11px"> {_esc(p.get("exchange",""))}</span>'
-            f'{role_tag}</span>'
-        )
+        role_tag = (f' <span style="font-size:10px;color:#9a6700">[{_esc(role)}]</span>'
+                    if role != "direct" else "")
+        return (f'<span style="margin-right:10px;white-space:nowrap">'
+                f'<strong style="color:#4493f8">{_esc(p["ticker"])}</strong>'
+                f'<span style="color:#8c959f;font-size:11px"> {_esc(p.get("exchange",""))}</span>'
+                f'{role_tag}</span>')
 
-    tickers_html = "".join(_ticker_chip(p) for p in public_direct) or "—"
+    tickers_html = "".join(_ticker_chip(p) for p in public_direct)
 
-    # Signal badges row
-    badges_html = (
-        _badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
-        + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#8c959f"))
-        + _badge(f"Tradability: {trade}", _TRADE_COLORS.get(trade, "#57606a"))
-    )
+    # Badges: skip unknown/unclear values to avoid unfinished-looking badges
+    badge_parts = []
+    if fund not in ("unclear",):
+        badge_parts.append(_badge(fund.capitalize(), _FUND_COLORS.get(fund, "#57606a")))
+    if react not in ("unknown",):
+        badge_parts.append(_badge(react.capitalize(), _REACT_COLORS.get(react, "#8c959f")))
+    badge_parts.append(_badge(trade.capitalize(), _TRADE_COLORS.get(trade, "#57606a")))
+    badges_html = "".join(badge_parts)
 
-    # Compact labeled entity rows — no background box, border-left accent
+    # Entity rows: compact labeled lines, no background box
     def _entity_row(label: str, items_: list, color: str = "#cdd0d4") -> str:
         if not items_:
             return ""
         content = ", ".join(_esc(str(x)) for x in items_[:6])
-        return (
-            f'<div style="margin:4px 0;font-size:12px;line-height:1.5">'
-            f'<span style="color:#57606a;min-width:160px;display:inline-block">{label}:</span>'
-            f'<span style="color:{color}">{content}</span></div>'
-        )
+        return (f'<div style="margin:4px 0;font-size:12px;line-height:1.5">'
+                f'<span style="color:#57606a;min-width:150px;display:inline-block">{label}:</span>'
+                f'<span style="color:{color}">{content}</span></div>')
 
     entity_html = (
         _entity_row("Direct companies", [p["name"] for p in public_direct if p.get("name")])
@@ -1733,92 +1836,89 @@ def _render_card(item: dict) -> str:
         + _entity_row("Instruments / indexes", instr_names, "#8c959f")
     )
 
-    # Market Read is always rendered; italic fallback when empty
-    if market_read:
-        mr_content = f'<span style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</span>'
-    else:
-        mr_content = '<span style="font-size:13px;color:#57606a;font-style:italic">No market read available.</span>'
-
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
         f'margin:0 0 18px;font-family:{_F};max-width:680px">'
-        # metadata row
-        f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-        f'letter-spacing:.5px;margin-bottom:6px">'
-        f'{a_type} · {importance} · conf:{confidence} · score:{score}{liveblog_tag}</div>'
+        # metadata: human-readable, no score/conf debug text
+        f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
+        f'letter-spacing:.5px;margin-bottom:6px">{_format_card_meta(item)}</div>'
         # headline
-        f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:12px">'
+        f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:10px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
-        # evidence block
-        + (
-            f'<div style="margin-bottom:12px">'
-            f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-            f'letter-spacing:.4px;margin-bottom:4px">Evidence</div>'
-            f'<div style="padding:8px 12px;border-left:3px solid #444c56">{ev_html}</div></div>'
-            if ev_html else ""
-        )
+        # Market Read — above evidence, always present
+        + f'<div style="margin-bottom:12px;padding:8px 12px;border-left:3px solid #4493f8">'
+        + f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
+        + f'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
+        + f'<div style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</div>'
+        + '</div>'
+        # evidence block — below Market Read, secondary
+        + (f'<div style="margin-bottom:12px;padding:8px 12px;border-left:3px solid #30363d">'
+           f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
+           f'letter-spacing:.4px;margin-bottom:4px">Evidence</div>'
+           f'{ev_html}</div>'
+           if ev_html else "")
         # signal badges
         + f'<div style="margin-bottom:12px">{badges_html}</div>'
-        # market read — always present
-        + (
-            f'<div style="margin-bottom:12px">'
-            f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-            f'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
-            f'<div style="padding-left:12px;border-left:3px solid #30363d">{mr_content}</div></div>'
-        )
-        # entity rows (no background)
-        + (
-            f'<div style="margin-bottom:10px;padding-left:12px;border-left:3px solid #30363d">'
-            + entity_html
-            + "</div>"
-            if entity_html else ""
-        )
-        # tickers
-        + (
-            f'<div style="font-size:12px;padding-top:8px;border-top:1px solid #30363d">'
-            f'<span style="color:#8c959f;text-transform:uppercase;font-size:11px;'
-            f'letter-spacing:.4px">Tickers: </span>{tickers_html}'
-            + (f' &nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>' if proxies else "")
-            + "</div>"
-        )
+        # entity rows
+        + (f'<div style="margin-bottom:10px;padding-left:12px;border-left:2px solid #30363d">'
+           + entity_html + "</div>"
+           if entity_html else "")
+        # tickers / proxies footer
+        + (f'<div style="font-size:12px;padding-top:8px;border-top:1px solid #30363d">'
+           f'<span style="color:#57606a;text-transform:uppercase;font-size:11px;'
+           f'letter-spacing:.4px">Tickers: </span>{tickers_html}'
+           + (f' &nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>'
+              if proxies else "")
+           + "</div>"
+           if tickers_html or proxies else "")
         + "</div>"
     )
 
 
 def _render_watchlist_row(item: dict) -> str:
-    """Compact card for Watchlist (D): headline + 2-4 evidence snippets, no brief duplication."""
+    """Compact mini-card for Watchlist: type / headline / why it matters / 2-3 snippets / badges."""
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
-    a_type = _esc((item.get("article_type") or "").replace("_", " ").upper())
-    brief = _esc(item.get("brief_bullet") or "")
+    a_type_raw = (item.get("article_type") or "").lower()
+    type_label = _esc(_TYPE_READABLE.get(a_type_raw, a_type_raw.replace("_", " ").title()))
+
+    brief = (item.get("brief_bullet") or "").strip()
     headline_norm = (item.get("headline_en") or "").strip().lower()
-    brief_norm = (item.get("brief_bullet") or "").strip().lower().rstrip(".")
-    # Suppress brief if it is essentially the headline
-    if brief_norm and (brief_norm == headline_norm or brief_norm.startswith(headline_norm[:30])):
+    brief_norm = brief.lower().rstrip(".")
+    # Suppress brief if essentially a repeat of the headline
+    if brief_norm and headline_norm.startswith(brief_norm[:35]):
         brief = ""
 
     fund = (item.get("signal_fundamental") or "neutral").lower()
     trade = (item.get("tradability") or "watch-only").lower()
-    score = item.get("investment_score", "")
-    color = _FUND_COLORS.get(fund, "#57606a")
 
-    snips = (item.get("evidence_lt") or [])[:4]
+    # 2-3 evidence snippets only
+    snips = (item.get("evidence_lt") or [])[:3]
     ev_html = "".join(
-        f'<div style="margin:2px 0;font-size:11px;color:#8c959f;font-style:italic">'
+        f'<div style="margin:2px 0;font-size:11px;color:#8c959f;font-style:italic;line-height:1.4">'
         f'&ldquo;{_esc(s)}&rdquo;</div>'
         for s in snips
     )
 
+    # Only show meaningful badges — skip neutral/unclear/watch-only defaults
+    badge_parts = []
+    if fund not in ("neutral", "unclear"):
+        badge_parts.append(_badge(fund.capitalize(), _FUND_COLORS.get(fund, "#57606a")))
+    if trade == "direct":
+        badge_parts.append(_badge("Direct", _TRADE_COLORS["direct"]))
+    badges = "".join(badge_parts)
+
     return (
         f'<div style="border-left:3px solid #30363d;padding:8px 14px;'
         f'margin:0 0 10px;font-family:{_F}">'
-        f'<div style="font-size:11px;color:#8c959f;margin-bottom:2px">'
-        f'{a_type} · score:{score}</div>'
+        f'<div style="font-size:11px;color:#57606a;margin-bottom:3px">{type_label}</div>'
         f'<div style="font-size:14px;font-weight:600;margin-bottom:4px">'
-        f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
-        + (f'<div style="font-size:13px;color:#cdd0d4;margin-bottom:5px">{brief}</div>' if brief else "")
+        f'<a href="{url}" style="color:#cdd0d4;text-decoration:none">{headline}</a></div>'
+        + (f'<div style="font-size:12px;color:#8c959f;margin-bottom:5px;line-height:1.4">'
+           f'<span style="color:#57606a">Why it matters:</span> {_esc(brief)}</div>'
+           if brief else "")
         + (f'<div style="margin-bottom:5px">{ev_html}</div>' if ev_html else "")
-        + f'<div>{_badge(fund, color)}{_badge(trade, _TRADE_COLORS.get(trade, "#57606a"))}</div>'
+        + (f'<div style="margin-top:4px">{badges}</div>' if badges else "")
         + "</div>"
     )
 
@@ -1860,53 +1960,43 @@ def _render_liveblog_row(sub: dict) -> str:
     )
 
 
-def _render_tickers_table(items: list[dict]) -> str:
-    """One row per verified ticker from direct_public_company cards only."""
-    rows = []
+def _render_tickers_stacked(items: list[dict]) -> str:
+    """Mobile-friendly stacked ticker cards (one card per directly affected listed company)."""
+    cards: list[str] = []
     seen: set[str] = set()
     for item in items:
-        # Only directly-named company articles belong in this table
         if (item.get("article_type") or "") != "direct_public_company":
             continue
         fund = (item.get("signal_fundamental") or "unclear").lower()
         react = (item.get("signal_market_reaction") or "unknown").lower()
         url = _esc(item.get("url") or "")
-        what = _esc((item.get("brief_bullet") or item.get("headline_en") or "")[:120])
+        what = _esc((item.get("brief_bullet") or item.get("headline_en") or "")[:110])
         for p in (item.get("public_tickers") or []):
             t = p.get("ticker", "")
             role = (p.get("role") or "direct").lower()
             if not t or t in seen or role != "direct":
                 continue
             seen.add(t)
-            rows.append(
-                f'<tr style="border-bottom:1px solid #30363d">'
-                f'<td style="padding:7px 8px;font-weight:700;white-space:nowrap;color:#4493f8">'
-                f'<a href="{url}" style="color:#4493f8;text-decoration:none">{_esc(t)}</a></td>'
-                f'<td style="padding:7px 8px;color:#8c959f;font-size:12px;white-space:nowrap">'
-                f'{_esc(p.get("exchange",""))}</td>'
-                f'<td style="padding:7px 8px;font-size:13px;color:#cdd0d4">{what}</td>'
-                f'<td style="padding:7px 8px;white-space:nowrap">'
-                f'{_badge(fund, _FUND_COLORS.get(fund,"#57606a"))}</td>'
-                f'<td style="padding:7px 8px;white-space:nowrap">'
-                f'{_badge(react, _REACT_COLORS.get(react,"#8c959f"))}</td>'
-                f'</tr>'
+            fund_badge = (_badge(fund.capitalize(), _FUND_COLORS.get(fund, "#57606a"))
+                          if fund not in ("unclear",) else "")
+            react_badge = (_badge(react.capitalize(), _REACT_COLORS.get(react, "#8c959f"))
+                           if react not in ("unknown",) else "")
+            cards.append(
+                f'<div style="border:1px solid #444c56;border-radius:6px;'
+                f'padding:10px 14px;margin:0 0 8px;font-family:{_F}">'
+                f'<div style="margin-bottom:5px">'
+                f'<a href="{url}" style="text-decoration:none">'
+                f'<strong style="color:#4493f8;font-size:15px">{_esc(t)}</strong></a>'
+                f'<span style="color:#8c959f;font-size:11px;margin-left:8px">'
+                f'{_esc(p.get("exchange",""))}</span></div>'
+                f'<div style="font-size:12px;color:#cdd0d4;margin-bottom:7px;line-height:1.4">'
+                f'{what}</div>'
+                f'<div>{fund_badge}{react_badge}</div>'
+                f'</div>'
             )
-    if not rows:
+    if not cards:
         return ""
-    header = (
-        '<tr style="border-bottom:1px solid #444c56">'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">TICKER</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">EXCHANGE</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">EVENT</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">FUNDAMENTAL</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">MARKET</th>'
-        '</tr>'
-    )
-    return (
-        f'<table style="width:100%;border-collapse:collapse;font-family:{_F};'
-        f'font-size:13px;max-width:680px">'
-        + header + "".join(rows) + '</table>'
-    )
+    return f'<div style="font-family:{_F}">{"".join(cards)}</div>'
 
 
 _ASSET_CLASS_LABELS: dict[str, str] = {
@@ -1924,12 +2014,12 @@ _DIR_COLORS = {
 }
 
 
-def _render_instruments_section(instruments: list[dict]) -> str:
-    """Compact 5-column table: Instrument · Class · Direction · Evidence · Relevance."""
+def _render_instruments_stacked(instruments: list[dict]) -> str:
+    """Mobile-friendly stacked instrument cards: name+class+direction / evidence snippet / relevance."""
     if not instruments:
         return ""
 
-    rows: list[str] = []
+    cards: list[str] = []
     for instr in instruments:
         display = _esc(instr.get("display") or instr.get("symbol") or "")
         symbol = _esc(instr.get("symbol") or "")
@@ -1937,6 +2027,7 @@ def _render_instruments_section(instruments: list[dict]) -> str:
         ac_label = _ASSET_CLASS_LABELS.get(asset_class, asset_class.replace("_", " ").title())
         unit = instr.get("unit") or ""
         direction = (instr.get("direction") or "unclear").lower()
+        dir_color = _DIR_COLORS.get(direction, "#8c959f")
         evidence_arts = instr.get("evidence_articles") or []
 
         first_snip = ""
@@ -1951,58 +2042,46 @@ def _render_instruments_section(instruments: list[dict]) -> str:
             if url and hl:
                 short = hl[:55] + ("…" if len(hl) > 55 else "")
                 source_link = (
-                    f'<a href="{_esc(url)}" style="color:#4493f8;text-decoration:none">'
+                    f'<a href="{_esc(url)}" style="color:#4493f8;text-decoration:none;font-size:11px">'
                     f'{_esc(short)}</a>'
                 )
             mr = (art.get("market_read") or "").strip()
             if mr:
                 first_sent = mr.split(".")[0].strip()
-                words = first_sent.split()[:18]
+                words = first_sent.split()[:16]
                 relevance = " ".join(words)
                 if relevance and not relevance.endswith("."):
                     relevance += "."
 
-        dir_color = _DIR_COLORS.get(direction, "#8c959f")
-        # Instrument cell: clean separators between display / symbol / unit
-        label_bits = [f'<strong style="color:#cdd0d4">{display}</strong>']
+        # Name header bits: display · symbol (if different) · unit
+        name_bits = [f'<strong style="color:#cdd0d4;font-size:14px">{display}</strong>']
         if symbol and symbol != display:
-            label_bits.append(f'<span style="color:#8c959f;font-size:11px">{symbol}</span>')
+            name_bits.append(f'<span style="color:#8c959f;font-size:11px">{symbol}</span>')
         if unit:
-            label_bits.append(f'<span style="color:#8c959f;font-size:11px">{_esc(unit)}</span>')
-        instrument_cell = ' <span style="color:#8c959f">·</span> '.join(label_bits)
+            name_bits.append(f'<span style="color:#8c959f;font-size:11px">{_esc(unit)}</span>')
+        name_html = ' <span style="color:#444c56">·</span> '.join(name_bits)
 
-        rows.append(
-            '<tr style="border-bottom:1px solid #30363d;vertical-align:top">'
-            f'<td style="padding:7px 8px;white-space:nowrap">{instrument_cell}</td>'
-            f'<td style="padding:7px 8px;white-space:nowrap">{_badge(ac_label, "#0969da")}</td>'
-            f'<td style="padding:7px 8px;white-space:nowrap">{_badge(direction, dir_color)}</td>'
-            '<td style="padding:7px 8px;font-size:12px;color:#8c959f;font-style:italic">'
-            + (f'&ldquo;{_esc(first_snip)}&rdquo;' if first_snip else "")
-            + '</td>'
-            '<td style="padding:7px 8px;font-size:12px;color:#cdd0d4">'
-            + _esc(relevance)
-            + (f'<br/><span style="font-size:11px">{source_link}</span>' if source_link else "")
-            + '</td>'
-            '</tr>'
+        dir_badge = (_badge(direction.capitalize(), dir_color)
+                     if direction not in ("unclear",) else "")
+
+        cards.append(
+            f'<div style="border:1px solid #444c56;border-radius:6px;'
+            f'padding:10px 14px;margin-bottom:8px;font-family:{_F}">'
+            f'<div style="margin-bottom:6px;display:flex;align-items:center;'
+            f'gap:6px;flex-wrap:wrap">'
+            f'{name_html}'
+            f'<span>{_badge(ac_label, "#0969da")}{dir_badge}</span></div>'
+            + (f'<div style="font-size:12px;color:#8c959f;font-style:italic;margin-bottom:4px;'
+               f'line-height:1.4">&ldquo;{_esc(first_snip)}&rdquo;</div>'
+               if first_snip else "")
+            + (f'<div style="font-size:12px;color:#cdd0d4;line-height:1.4">{_esc(relevance)}'
+               + (f' {source_link}' if source_link else "")
+               + '</div>'
+               if relevance or source_link else "")
+            + '</div>'
         )
 
-    if not rows:
-        return ""
-
-    header = (
-        '<tr style="border-bottom:1px solid #444c56">'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">INSTRUMENT</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">CLASS</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">DIRECTION</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">EVIDENCE</th>'
-        '<th style="padding:7px 8px;text-align:left;font-size:11px;color:#8c959f">RELEVANCE</th>'
-        '</tr>'
-    )
-    return (
-        f'<table style="width:100%;border-collapse:collapse;font-family:{_F};'
-        f'font-size:13px;max-width:680px">'
-        + header + "".join(rows) + "</table>"
-    )
+    return "".join(cards)
 
 
 def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
@@ -2013,47 +2092,68 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
     skipped: list[dict] = result.get("skipped") or []
     all_main = top_signals + watchlist
 
-    wrap = f'font-family:{_F};max-width:720px;font-size:14px;line-height:1.5'
+    wrap = f'font-family:{_F};max-width:680px;font-size:14px;line-height:1.5'
     if not all_main and not liveblogs:
         return f'<div style="{wrap}"><p>No new investing-relevant VŽ articles in this period.</p></div>'
 
-    h2s = (f'font-family:{_F};font-size:13px;color:#8c959f;text-transform:uppercase;'
-           f'letter-spacing:.6px;margin:32px 0 12px;font-weight:600;'
-           f'border-bottom:1px solid #30363d;padding-bottom:6px')
+    h2s = (f'font-family:{_F};font-size:11px;color:#57606a;text-transform:uppercase;'
+           f'letter-spacing:.8px;margin:28px 0 10px;font-weight:700;'
+           f'border-bottom:1px solid #30363d;padding-bottom:5px')
+
+    # Dynamic section letter — sections are lettered sequentially, no gaps
+    _letter_ord = [ord("A")]
+
+    def _section(title: str) -> str:
+        letter = chr(_letter_ord[0])
+        _letter_ord[0] += 1
+        return f'<h2 style="{h2s}">{letter} · {title}</h2>'
 
     parts = [
         f'<div style="{wrap}">',
-        f'<div style="font-size:12px;color:#8c959f;margin-bottom:20px;font-family:{_F}">'
-        f'Investment Brief · {today.isoformat()} · '
-        f'{len(top_signals)} top signals · {len(watchlist)} watchlist · '
-        f'{len(liveblogs)} day-pulse</div>',
+        f'<div style="font-size:11px;color:#57606a;margin-bottom:20px;font-family:{_F}">'
+        f'VŽ Investment Brief · {today.isoformat()} · '
+        f'{len(top_signals)} signals · {len(watchlist)} watchlist · '
+        f'{len(liveblogs)} day-pulse items</div>',
     ]
 
-    # ── A · Executive Brief — dedup against headline-only repeats ─────
-    brief_pool = sorted(top_signals + watchlist, key=lambda x: -x.get("investment_score", 0))
+    # ── A · Executive Brief ───────────────────────────────────────────
+    # Top signals first (investable angle), then watchlist to fill if space remains.
+    # Cap at 6 bullets; each sentence max 24 words.
+    brief_primary = sorted(top_signals, key=lambda x: -x.get("investment_score", 0))
+    brief_secondary = sorted(watchlist, key=lambda x: -x.get("investment_score", 0))
+    bullets: list[str] = []
+    seen_bullets: set[str] = set()
+
+    def _add_brief_bullet(item: dict) -> None:
+        if len(bullets) >= 6:
+            return
+        b = (item.get("brief_bullet") or "").strip()
+        if not b:
+            b = (item.get("market_read") or "").strip()
+        if not b:
+            b = (item.get("headline_en") or "").strip()
+        if not b:
+            return
+        words = b.split()[:24]
+        b = " ".join(words).rstrip(",;")
+        if not b.endswith("."):
+            b += "."
+        norm = b.lower()[:60]
+        if norm not in seen_bullets:
+            seen_bullets.add(norm)
+            bullets.append(b)
+
+    for item in brief_primary:
+        _add_brief_bullet(item)
+    for item in brief_secondary:
+        _add_brief_bullet(item)
+
     lb_brief_sorted = sorted(
         [s for s in liveblogs if s.get("investment_score", 0) >= _SCORE_BRIEF],
         key=lambda x: -x.get("investment_score", 0),
     )
-
-    bullets: list[str] = []
-    seen_bullets: set[str] = set()
-    for item in brief_pool[:10]:
-        b = (item.get("brief_bullet") or "").strip()
-        if not b:
-            fallback = (item.get("market_read") or item.get("headline_en") or "").strip()
-            words = fallback.split()[:22]
-            b = " ".join(words).rstrip(",;")
-            if b and not b.endswith("."):
-                b += "."
-        norm = b.lower()[:60]
-        if b and norm not in seen_bullets:
-            seen_bullets.add(norm)
-            bullets.append(b)
-        if len(bullets) >= 10:
-            break
     for sub in lb_brief_sorted:
-        if len(bullets) >= 10:
+        if len(bullets) >= 6:
             break
         h = (sub.get("headline_en") or "").strip()
         norm = h.lower()[:60]
@@ -2062,50 +2162,55 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
             bullets.append(h if h.endswith(".") else h + ".")
 
     if bullets:
-        parts.append(f'<h2 style="{h2s}">A · Executive Brief</h2>')
+        parts.append(_section("Executive Brief"))
         parts.append(
             f'<div style="border:1px solid #444c56;border-left:4px solid #4493f8;'
             f'border-radius:8px;padding:14px 18px;margin:0 0 20px;font-family:{_F}">'
             f'<ul style="margin:0;padding-left:20px">'
         )
         parts.extend(
-            f'<li style="margin:9px 0;font-size:14px;line-height:1.5">{_esc(b)}</li>'
+            f'<li style="margin:8px 0;font-size:14px;line-height:1.5">{_esc(b)}</li>'
             for b in bullets
         )
         parts.append("</ul></div>")
 
     # ── B · Top Signals ───────────────────────────────────────────────
     if top_signals:
-        parts.append(f'<h2 style="{h2s}">B · Top Signals</h2>')
+        parts.append(_section("Top Signals"))
         parts.extend(_render_card(c) for c in top_signals)
 
-    # ── C · Day Pulse (liveblog subitems) ─────────────────────────────
+    # ── C · Day Pulse — always lettered; shows placeholder if empty ───
+    parts.append(_section("Day Pulse"))
     if liveblogs:
-        parts.append(f'<h2 style="{h2s}">C · Day Pulse</h2>')
         parts.append(f'<div style="font-family:{_F}">')
         parts.extend(_render_liveblog_row(s) for s in liveblogs)
         parts.append("</div>")
+    else:
+        parts.append(
+            f'<div style="font-size:13px;color:#57606a;font-style:italic;'
+            f'padding:6px 0 12px">No liveblog items in this run.</div>'
+        )
 
     # ── D · Watchlist ─────────────────────────────────────────────────
     if watchlist:
-        parts.append(f'<h2 style="{h2s}">D · Watchlist</h2>')
+        parts.append(_section("Watchlist"))
         parts.extend(_render_watchlist_row(i) for i in watchlist)
 
-    # ── E · Direct Public Tickers (table only) ────────────────────────
-    ticker_table = _render_tickers_table(top_signals + watchlist)
-    if ticker_table:
-        parts.append(f'<h2 style="{h2s}">E · Direct Public Tickers</h2>')
-        parts.append(ticker_table)
+    # ── E · Direct Public Tickers (mobile-friendly stacked) ───────────
+    ticker_html = _render_tickers_stacked(top_signals + watchlist)
+    if ticker_html:
+        parts.append(_section("Direct Public Tickers"))
+        parts.append(ticker_html)
 
-    # ── F · Market Instruments (compact table) ────────────────────────
-    instr_html = _render_instruments_section(instruments)
+    # ── F · Market Instruments (mobile-friendly stacked) ─────────────
+    instr_html = _render_instruments_stacked(instruments)
     if instr_html:
-        parts.append(f'<h2 style="{h2s}">F · Market Instruments</h2>')
+        parts.append(_section("Market Instruments"))
         parts.append(instr_html)
 
     # ── G · Debug footer (off by default) ─────────────────────────────
     if show_debug and skipped:
-        parts.append(f'<h2 style="{h2s}">G · Skipped / Low Relevance</h2>')
+        parts.append(_section("Skipped / Low Relevance"))
         parts.append(
             f'<div style="font-family:{_F};font-size:12px;color:#8c959f;'
             f'padding:10px 14px;border:1px solid #30363d;border-radius:6px">'
