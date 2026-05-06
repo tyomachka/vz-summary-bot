@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import os
 import random
+import re
 import smtplib
 import sys
 import time
@@ -394,12 +395,20 @@ GOOD: "apie 200 mln. Eur Kairių"
 BAD:  "2026–2027 metais didieji projektai turės daug įtakos viso sektoriaus rodikliams..."
 
 ═══════════════════════════════════════════
-STEP 6 — TICKERS:
-• List in candidate_companies ONLY companies DIRECTLY NAMED in the article whose event directly affects them.
-• Do NOT add sector-proxy companies to candidate_companies.
-• If a company is clearly public (e.g. Micron, ConocoPhillips, Pinterest, eBay, GameStop) name it — Python maps to ticker.
-• For useful proxies NOT in the article, use ticker_proxies list.
-• Never invent ticker symbols. Python validates all names.
+STEP 6 — TICKERS (with roles):
+candidate_companies must be a JSON array of objects: [{"name": "...", "role": "..."}]
+Roles:
+  direct          = company is the primary subject of the event (earnings, M&A, IPO, regulation on them)
+  related         = company is directly affected or competing (e.g. rival mentioned)
+  background      = mentioned only for industry context
+  comparison_only = used only as a comparison benchmark, not actually involved
+  private         = known to be private (SpaceX, OpenAI, etc.)
+
+ONLY companies with role=direct appear in the Direct Public Tickers table (section C).
+related/background tickers are shown inside the card only.
+• Name companies exactly as written in the article.
+• ticker_proxies: companies NOT mentioned in the article but useful as sector proxies.
+• Never invent ticker symbols — Python validates names against a static map.
 
 ═══════════════════════════════════════════
 STEP 7 — SIGNALS:
@@ -438,6 +447,16 @@ Write 2–3 English sentences explaining why this event matters for investors.
 • Cover both the short-term signal and relevant long-term context.
 • No BUY/SELL/HOLD. No filler phrases ("This is significant because…").
 • Be specific: name the mechanism, the affected asset class, the magnitude.
+• Every number you use in market_read MUST appear verbatim in evidence_lt. If you cannot
+  trace a number to evidence, omit it from market_read.
+
+═══════════════════════════════════════════
+STEP 12 — LIVEBLOG SUBITEMS (only when is_liveblog=true):
+Split the liveblog into individual timestamped entries. Output each as a subitem.
+• Include only entries with an investable angle (price move, company result, macro data).
+• Omit purely political/social/sports entries.
+• score_hint: your estimate of investment relevance 0–100 (use the same rubric as importance).
+  0=irrelevant, 40=watchlist-grade, 70+=top-signal-grade.
 
 ═══════════════════════════════════════════
 HARD RULES (any violation = drop the item in Python):
@@ -456,18 +475,29 @@ JSON SCHEMA (one object per article):
   "importance": "high|medium|low",
   "confidence": "high|medium|low",
   "headline_en": "<≤12 words>",
-  "brief_bullet": "<≤22 words, complete sentence, no ellipsis, must have a number or market implication>",
-  "evidence_lt": ["<verbatim LT, ≤12 words, prefer with numbers>", ...],
-  "market_read": "<2–3 English sentences on investor relevance; no BUY/SELL/HOLD; no filler>",
-  "candidate_companies": ["<name exactly as written in article>", ...],
-  "ticker_proxies": ["<company not in article but possibly affected — optional>"],
-  "affected_direct": ["<directly mentioned companies/sectors/countries>"],
-  "affected_indirect": ["<sectors/assets/markets possibly affected>"],
+  "brief_bullet": "<≤22 words, complete sentence, no ellipsis, number or market implication>",
+  "evidence_lt": ["<verbatim LT substring, ≤12 words, prefer numeric snippets>", ...],
+  "market_read": "<2–3 EN sentences; numbers must appear in evidence_lt; no BUY/SELL/HOLD>",
+  "candidate_companies": [{"name": "<as written>", "role": "direct|related|background|comparison_only|private"}, ...],
+  "ticker_proxies": ["<company not in article but useful sector proxy>"],
+  "affected_direct": ["<companies/sectors/countries directly involved>"],
+  "affected_indirect": ["<assets/markets possibly affected>"],
   "signal_fundamental": "bullish|bearish|mixed|neutral|unclear",
   "signal_market_reaction": "positive|negative|neutral|unknown",
   "tradability": "direct|indirect|watch-only",
-  "skip_reason": "<only for low_relevance/sponsored/duplicate items, else omit>"
+  "skip_reason": "<only for low_relevance/sponsored/duplicate, else omit>",
+  "liveblog_subitems": [
+    {
+      "time": "<HH:MM or empty string>",
+      "headline_en": "<≤10 word English summary of this entry>",
+      "brief_lt": "<verbatim LT snippet from this entry, ≤15 words>",
+      "entities": ["<company or country name>"],
+      "signal": "bullish|bearish|neutral|unclear",
+      "score_hint": 0
+    }
+  ]
 }
+Note: liveblog_subitems is ONLY populated when is_liveblog=true. Omit for normal articles.
 
 Output exactly: {"items": [<item>, <item>, ...]}
 
@@ -502,13 +532,136 @@ def normalize_text(s: str) -> str:
 
 _DROP_TYPES = {"low_relevance", "sponsored_or_ad"}
 _IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
-_MAX_HIGH = 6       # max cards allowed at HIGH importance (target 4-6)
-_MAX_MAIN = 14      # max non-liveblog cards total (up to 6 Top Signals + 8 Watchlist)
-_MAX_TOP = 6        # max cards in Top Signals (B); rest go to Watchlist (D)
+_MAX_TOP = 6        # max cards in Top Signals (B)
 _MAX_WATCHLIST = 8  # max cards in Watchlist (D)
 
-# These article types should never be HIGH importance and cap confidence at medium.
+# Score thresholds
+_SCORE_TOP = 60           # minimum score for Top Signals
+_SCORE_TOP_FALLBACK = 50  # pulled up when fewer than 4 items hit 60
+_SCORE_WATCH = 35         # minimum score for Watchlist
+_SCORE_BRIEF = 40         # minimum subitem score to appear in Executive Brief
+
+# Article type base scores
+_TYPE_SCORE: dict[str, int] = {
+    "direct_public_company": 30,
+    "macro_signal": 25,
+    "commodity_signal": 25,
+    "geopolitical_signal": 20,
+    "regulation_policy": 20,
+    "sector_signal": 15,
+    "private_company": 15,
+    "market_overview": 0,
+    "educational": 0,
+    "personal_finance": 0,
+    "low_relevance": 0,
+    "sponsored_or_ad": 0,
+}
+
+# Article type penalties (applied on top of base)
+_TYPE_PENALTY: dict[str, int] = {
+    "sponsored_or_ad": -25,
+    "market_overview": -15,
+    "educational": -10,
+    "personal_finance": -10,
+}
+
+# These article types should never lead Top Signals.
 _OPINION_TYPES = {"educational", "personal_finance", "market_overview"}
+
+
+def compute_investment_score(item: dict) -> int:
+    """Score 0-100 based on article type, Baltic status, evidence quality, market reaction."""
+    a_type = (item.get("article_type") or "").lower()
+    react = (item.get("signal_market_reaction") or "unknown").lower()
+    evidence = item.get("evidence_lt") or []
+    skip = (item.get("skip_reason") or "").lower()
+
+    score = _TYPE_SCORE.get(a_type, 10)
+    score += _TYPE_PENALTY.get(a_type, 0)
+
+    # Baltic listed company bonus
+    if item.get("is_baltic"):
+        score += 20
+
+    # Concrete numbers present in evidence
+    if any(re.search(r"\d", s) for s in evidence):
+        score += 10
+
+    # Explicit market reaction stated in article
+    if react in {"positive", "negative", "neutral"}:
+        score += 10
+
+    # Lifestyle / culture penalty on low_relevance
+    if a_type == "low_relevance" and any(
+        w in skip for w in ("lifestyle", "culture", "gastronomy", "travel")
+    ):
+        score -= 20
+
+    return max(0, min(100, score))
+
+
+def compute_subitem_score(sub: dict) -> int:
+    """Score a liveblog subitem using Gemini's score_hint + entity type adjustments."""
+    score = max(0, min(100, int(sub.get("score_hint") or 40)))
+    # Baltic public company bonus
+    for name in sub.get("entities") or []:
+        info = _lookup_ticker(name)
+        if info and info.get("country") in _BALTIC_COUNTRIES:
+            score = min(100, score + 10)
+            break
+    if (sub.get("signal") or "unclear").lower() == "unclear":
+        score = max(0, score - 10)
+    return score
+
+
+def _dedup_snippets(snippets: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for s in snippets:
+        norm = normalize_text(s)
+        if norm not in seen:
+            seen.add(norm)
+            result.append(s)
+    return result
+
+
+def _is_incomplete_numeric(snippet: str) -> bool:
+    """True when the snippet ends with a bare decimal/percent token with no unit/context."""
+    tokens = snippet.strip().rstrip(".,;").split()
+    if not tokens:
+        return False
+    last = tokens[-1]
+    # Bare number or percentage at end with ≤3 tokens total → incomplete
+    return bool(re.match(r"^[\d,.]+%?$", last)) and len(tokens) <= 3
+
+
+def _extract_number_tokens(text: str) -> set[str]:
+    return set(re.findall(r"\b\d[\d,./]*%?\b", text or ""))
+
+
+def _validate_numbers_against_evidence(item: dict) -> None:
+    """
+    If a number in brief_bullet or market_read cannot be traced to evidence_lt,
+    replace the field with a safe fallback to prevent cross-article contamination.
+    """
+    evidence_joined = " ".join(item.get("evidence_lt") or [])
+    for field in ("brief_bullet", "market_read"):
+        text = item.get(field) or ""
+        unsupported = [
+            n for n in _extract_number_tokens(text)
+            if n not in evidence_joined
+        ]
+        if unsupported:
+            print(f"  num-contamination {field} {unsupported}: {item.get('headline_en')}")
+            if field == "brief_bullet":
+                # Fall back to headline — safer than a fabricated number
+                headline = (item.get("headline_en") or "").strip()
+                item["brief_bullet"] = headline if headline.endswith(".") else headline + "."
+            else:
+                # Strip the offending numbers inline (crude but safe)
+                for n in unsupported:
+                    text = re.sub(r"\b" + re.escape(n) + r"\b", "[N]", text)
+                item[field] = text
 
 
 def _lookup_ticker(name: str) -> dict | None:
@@ -537,10 +690,9 @@ def _theme_key(item: dict) -> str:
 
 def validate(extracted: dict, articles: list[dict]) -> dict:
     """
-    Returns {"main": [...], "liveblogs": [...], "skipped": [...]}.
-    main     = non-liveblog items that passed all checks, capped at _MAX_MAIN.
-    liveblogs = is_liveblog=True items (market-relevant only).
-    skipped  = dropped items with reason strings for section F.
+    Returns {"top_signals", "watchlist", "liveblogs", "skipped"}.
+    Selection is score-based (investment_score), not just Gemini importance labels.
+    Liveblogs are split into scored subitems; cross-dedup prevents double coverage.
     """
     by_url = {a["url"]: a for a in articles}
     raw_items = extracted.get("items", []) or []
@@ -559,8 +711,7 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         a_type = (item.get("article_type") or "").strip().lower()
 
         if a_type in _DROP_TYPES:
-            reason = item.get("skip_reason") or a_type
-            _skip(item, reason)
+            _skip(item, item.get("skip_reason") or a_type)
             continue
 
         a = by_url.get(item.get("url"))
@@ -570,53 +721,65 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
 
         body_norm = normalize_text(a["body"])
 
-        # Evidence validation — enforce ≤12-word cap and body presence
+        # Evidence: trim to 12 words, verify substring in body, dedup, reject incomplete numerics
         snippets = [s for s in (item.get("evidence_lt") or []) if s]
         trimmed = [" ".join(s.split()[:12]) for s in snippets]
         valid_snips = [s for s in trimmed if normalize_text(s) in body_norm]
+        valid_snips = _dedup_snippets(valid_snips)
+        valid_snips = [s for s in valid_snips if not _is_incomplete_numeric(s)]
         if len(valid_snips) < 2 and not item.get("is_liveblog"):
             _skip(item, "fewer than 2 evidence snippets verified in body")
             continue
-        item["evidence_lt"] = valid_snips[:8]  # up to 8 for top signals; render trims to 4 for watchlist
+        item["evidence_lt"] = valid_snips[:8]
 
-        # Ticker resolution
+        # Ticker resolution — candidate_companies is now list of {name, role} objects
         public, companies_private, tickers_unclear = [], [], []
-        seen: set[str] = set()
-        for name in item.get("candidate_companies") or []:
+        seen_tickers: set[str] = set()
+        seen_names: set[str] = set()
+        raw_companies = item.get("candidate_companies") or []
+        for co in raw_companies:
+            if isinstance(co, dict):
+                name = (co.get("name") or "").strip()
+                role = (co.get("role") or "direct").strip().lower()
+            else:
+                name = str(co).strip()
+                role = "direct"
+            if not name:
+                continue
+            key = name.lower()
             info = _lookup_ticker(name)
-            key = name.strip().lower()
             if info is None:
-                if key and key not in seen:
-                    tickers_unclear.append(name.strip())
-                    seen.add(key)
+                if key not in seen_names:
+                    tickers_unclear.append({"name": name, "role": role})
+                    seen_names.add(key)
             elif info["ticker"].startswith("N/A"):
-                if key not in seen:
-                    companies_private.append(name.strip())
-                    seen.add(key)
+                if key not in seen_names:
+                    companies_private.append({"name": name, "role": role})
+                    seen_names.add(key)
             else:
                 t = info["ticker"]
-                if t not in seen:
-                    public.append(info)
-                    seen.add(t)
+                if t not in seen_tickers:
+                    public.append({**info, "name": name, "role": role})
+                    seen_tickers.add(t)
 
         item["public_tickers"] = public
         item["companies_private"] = companies_private
         item["tickers_unclear"] = tickers_unclear
         item["is_baltic"] = any(p.get("country") in _BALTIC_COUNTRIES for p in public)
 
-        # Opinion/speculative types: cap importance at medium, confidence at medium
+        # Opinion types: cap confidence at medium
         if a_type in _OPINION_TYPES:
-            if (item.get("importance") or "low").lower() == "high":
-                item["importance"] = "medium"
-                print(f"  demoted to medium (opinion type): {item.get('headline_en')}")
             if (item.get("confidence") or "low").lower() == "high":
                 item["confidence"] = "medium"
 
-        # Ensure brief_bullet has no ellipsis (patch if Gemini violated the rule)
+        # Fix ellipsis in brief_bullet
         bullet = (item.get("brief_bullet") or "").strip()
         if bullet.endswith("…") or bullet.endswith("..."):
             bullet = bullet.rstrip(".… ").rstrip(",").rstrip() + "."
             item["brief_bullet"] = bullet
+
+        # Number contamination check: numbers in brief_bullet/market_read must be in evidence
+        _validate_numbers_against_evidence(item)
 
         passed.append(item)
 
@@ -631,16 +794,16 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         if existing is None:
             by_headline[key] = item
         else:
-            er = _IMPORTANCE_RANK.get((existing.get("importance") or "low").lower(), 3)
-            ir = _IMPORTANCE_RANK.get((item.get("importance") or "low").lower(), 3)
-            if ir < er:
-                _skip(existing, f"dedup: superseded by higher-importance variant")
+            ei = _IMPORTANCE_RANK.get((existing.get("importance") or "low").lower(), 3)
+            ii = _IMPORTANCE_RANK.get((item.get("importance") or "low").lower(), 3)
+            if ii < ei:
+                _skip(existing, "dedup: superseded by higher-importance variant")
                 by_headline[key] = item
             else:
                 _skip(item, "dedup: duplicate headline")
     deduped = list(by_headline.values())
 
-    # ── Pass 3: theme-based dedup (same entity + similar headline) ───
+    # ── Pass 3: theme-based dedup (same entity + similar headline words) ─
     theme_map: dict[str, dict] = {}
     final_passed: list[dict] = []
     for item in deduped:
@@ -650,7 +813,6 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
             theme_map[tk] = item
             final_passed.append(item)
         else:
-            # Keep the one with more evidence; drop the other
             if len(item.get("evidence_lt") or []) > len(existing.get("evidence_lt") or []):
                 _skip(existing, "theme-dedup: merged into richer card")
                 theme_map[tk] = item
@@ -659,57 +821,108 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
             else:
                 _skip(item, "theme-dedup: merged into richer card")
 
-    # ── Pass 4: split liveblogs / main; enforce caps ─────────────────
-    liveblogs = [i for i in final_passed if i.get("is_liveblog")]
-    main_candidates = [i for i in final_passed if not i.get("is_liveblog")]
+    # ── Pass 4: compute investment_score for every item ───────────────
+    for item in final_passed:
+        item["investment_score"] = compute_investment_score(item)
 
-    main_candidates.sort(key=lambda x: (
-        _IMPORTANCE_RANK.get((x.get("importance") or "low").lower(), 3),
-        0 if x.get("is_baltic") else 1,
-    ))
+    # ── Pass 5: separate liveblogs / non-liveblogs ────────────────────
+    liveblog_articles = [i for i in final_passed if i.get("is_liveblog")]
+    non_liveblogs = [i for i in final_passed if not i.get("is_liveblog")]
 
-    # Cap HIGH labels at _MAX_HIGH
-    high_count = 0
-    for item in main_candidates:
-        if (item.get("importance") or "low").lower() == "high":
-            high_count += 1
-            if high_count > _MAX_HIGH:
-                item["importance"] = "medium"
-                print(f"  demoted to medium (HIGH cap): {item.get('headline_en')}")
+    # Sort non-liveblogs by score desc, Baltic first within same score
+    non_liveblogs.sort(key=lambda x: (-x["investment_score"], 0 if x.get("is_baltic") else 1))
 
-    # Split into top_signals (HIGH → section B) and watchlist (MEDIUM → section D)
-    top_signals: list[dict] = []
-    watchlist: list[dict] = []
-    low_items: list[dict] = []
-    for item in main_candidates:
-        imp = (item.get("importance") or "low").lower()
-        if imp == "high":
-            top_signals.append(item)
-        elif imp == "medium":
-            watchlist.append(item)
+    # ── Pass 6: score-based section assignment ────────────────────────
+    top_candidates = [i for i in non_liveblogs if i["investment_score"] >= _SCORE_TOP]
+    below_top = [i for i in non_liveblogs if i["investment_score"] < _SCORE_TOP]
+
+    # Enforce 4-8 evidence snippets for Top Signal candidates; demote if insufficient
+    top_signals_pre: list[dict] = []
+    for item in top_candidates:
+        if len(item.get("evidence_lt") or []) < 4:
+            item["investment_score"] = max(0, item["investment_score"] - 10)
+            below_top.append(item)
+            print(f"  demoted (evidence <4 for top signal): {item.get('headline_en')}")
         else:
-            low_items.append(item)
+            top_signals_pre.append(item)
+    below_top.sort(key=lambda x: -x["investment_score"])
 
-    # Demote low items to skipped
-    for item in low_items:
-        _skip(item, "low importance — demoted to skipped")
+    # Fallback: if fewer than 4 reach _SCORE_TOP, pull up items >= _SCORE_TOP_FALLBACK
+    if len(top_signals_pre) < 4:
+        for item in below_top[:]:
+            if len(top_signals_pre) >= 4:
+                break
+            if item["investment_score"] >= _SCORE_TOP_FALLBACK and len(item.get("evidence_lt") or []) >= 2:
+                top_signals_pre.append(item)
+                below_top.remove(item)
+                print(f"  pulled to top (fallback ≥{_SCORE_TOP_FALLBACK}): {item.get('headline_en')}")
 
-    # Cap top signals at _MAX_TOP; overflow goes to watchlist
-    if len(top_signals) > _MAX_TOP:
-        for item in top_signals[_MAX_TOP:]:
-            item["importance"] = "medium"
-            watchlist.append(item)
-        top_signals = top_signals[:_MAX_TOP]
+    # Cap Top Signals at _MAX_TOP; overflow goes back to below_top pool
+    top_signals = top_signals_pre[:_MAX_TOP]
+    overflow = top_signals_pre[_MAX_TOP:]
+    for item in overflow:
+        below_top.append(item)
+    below_top.sort(key=lambda x: -x["investment_score"])
 
-    # Cap watchlist at _MAX_WATCHLIST
+    # Build watchlist from remaining items scoring >= _SCORE_WATCH, in score order
+    watchlist = [i for i in below_top if i["investment_score"] >= _SCORE_WATCH]
+    skipped_low = [i for i in below_top if i["investment_score"] < _SCORE_WATCH]
+
+    for item in skipped_low:
+        _skip(item, f"score {item['investment_score']} below threshold {_SCORE_WATCH}")
+
+    # Cap watchlist at _MAX_WATCHLIST (already sorted by score, so lowest-score items drop)
     for item in watchlist[_MAX_WATCHLIST:]:
-        _skip(item, "card cap: beyond max watchlist")
+        _skip(item, f"cap: score {item['investment_score']}")
     watchlist = watchlist[:_MAX_WATCHLIST]
+
+    # Rule 10: if 3+ items passed threshold, must have ≥2 Top Signals unless all others <50
+    total_passing = len(top_signals) + len(watchlist)
+    if total_passing >= 3 and len(top_signals) < 2:
+        for item in list(watchlist):
+            if item["investment_score"] >= _SCORE_TOP_FALLBACK:
+                top_signals.append(item)
+                watchlist.remove(item)
+                print(f"  promoted to top_signals (rule 10): {item.get('headline_en')}")
+                break
+
+    # ── Pass 7: collect entities covered by full article cards ────────
+    covered_entities: set[str] = set()
+    for item in top_signals + watchlist:
+        for d in item.get("affected_direct") or []:
+            covered_entities.add(d.strip().lower())
+        for co in item.get("candidate_companies") or []:
+            name = co.get("name", "") if isinstance(co, dict) else str(co)
+            covered_entities.add(name.strip().lower())
+
+    # ── Pass 8: extract + score liveblog subitems; cross-dedup ───────
+    market_subitems: list[dict] = []
+    for lb_art in liveblog_articles:
+        for sub in lb_art.get("liveblog_subitems") or []:
+            sub["_parent_url"] = lb_art.get("url", "")
+            sub["investment_score"] = compute_subitem_score(sub)
+            # Check cross-dedup: is any entity already covered by a full article?
+            sub_entities = {e.strip().lower() for e in (sub.get("entities") or [])}
+            if sub_entities & covered_entities:
+                skipped.append({
+                    "headline_en": sub.get("headline_en", "—"),
+                    "article_type": "liveblog_subitem",
+                    "reason": "covered by full article card",
+                })
+            elif sub["investment_score"] >= _SCORE_WATCH:
+                market_subitems.append(sub)
+
+        # Also add covered_entities from any high-score subitems we're keeping
+        for sub in market_subitems:
+            for e in sub.get("entities") or []:
+                covered_entities.add(e.strip().lower())
+
+    market_subitems.sort(key=lambda x: (x.get("time") or "00:00"))
 
     return {
         "top_signals": top_signals,
         "watchlist": watchlist,
-        "liveblogs": liveblogs,
+        "liveblogs": market_subitems,
         "skipped": skipped,
     }
 
@@ -769,11 +982,19 @@ def _render_card(item: dict) -> str:
     unclear = item.get("tickers_unclear") or []
     proxies = item.get("ticker_proxies") or []
 
-    tickers_verified = (", ".join(
-        f'<strong>{_esc(p["ticker"])}</strong> '
-        f'<span style="color:#8c959f">({_esc(p["exchange"])})</span>'
-        for p in public
-    ) if public else "—")
+    def _ticker_label(p: dict) -> str:
+        role = (p.get("role") or "direct").lower()
+        role_suffix = (
+            f' <span style="font-size:10px;color:#9a6700;font-weight:400">[{_esc(role)}]</span>'
+            if role != "direct" else ""
+        )
+        return (
+            f'<strong>{_esc(p["ticker"])}</strong>'
+            f'<span style="color:#8c959f"> ({_esc(p["exchange"])})</span>'
+            f'{role_suffix}'
+        )
+
+    tickers_verified = (", ".join(_ticker_label(p) for p in public) if public else "—")
 
     fund = (item.get("signal_fundamental") or "unclear").lower()
     react = (item.get("signal_market_reaction") or "unknown").lower()
@@ -795,7 +1016,8 @@ def _render_card(item: dict) -> str:
         # header: type · importance · conf + headline + evidence
         f'<div style="border-bottom:1px dashed #444c56;padding-bottom:12px;margin-bottom:14px">'
         f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-        f'letter-spacing:.5px;margin-bottom:6px">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
+        f'letter-spacing:.5px;margin-bottom:6px">📰 {a_type} · {importance} · '
+        f'score:{item.get("investment_score", "?")} · conf:{confidence}{liveblog}</div>'
         f'<div style="margin:0 0 10px;font-size:15px;font-weight:600;line-height:1.35">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
         + (f'<div style="padding:8px 12px;border-left:3px solid #444c56;'
@@ -813,8 +1035,8 @@ def _render_card(item: dict) -> str:
           + '</div>'
         + _row("🎯", "Affected", affected_html)
         + _row("📊", "Tickers", tickers_verified)
-        + (_row("🏢", "Private", _join(priv)) if priv else "")
-        + (_row("❓", "Ticker unclear", _join(unclear)) if unclear else "")
+        + (_row("🏢", "Private", _join(p.get("name", "?") for p in priv)) if priv else "")
+        + (_row("❓", "Ticker unclear", _join(u.get("name", "?") for u in unclear)) if unclear else "")
         + (_row("🔭", "Proxies", _join(proxies)) if proxies else "")
         + '</div>'
     )
@@ -854,16 +1076,40 @@ def _render_watchlist_row(item: dict) -> str:
     )
 
 
-def _render_liveblog_row(item: dict) -> str:
-    headline = _esc(item.get("headline_en") or "")
-    url = _esc(item.get("url") or "")
-    brief = _esc(item.get("brief_bullet") or "")
+def _render_liveblog_row(sub: dict) -> str:
+    """Render one liveblog subitem (timestamped entry from Dienos Pulsas)."""
+    time_str = _esc(sub.get("time") or "")
+    headline = _esc(sub.get("headline_en") or "")
+    brief_lt = _esc(sub.get("brief_lt") or "")
+    url = _esc(sub.get("_parent_url") or "")
+    signal = (sub.get("signal") or "unclear").lower()
+    entities = sub.get("entities") or []
+    score = sub.get("investment_score", "")
+    sig_color = _FUND_COLORS.get(signal, "#8c959f")
+
+    ent_html = (
+        f' <span style="font-size:11px;color:#8c959f">'
+        + ", ".join(_esc(e) for e in entities[:3])
+        + "</span>"
+    ) if entities else ""
+
     return (
-        f'<div style="padding:6px 0;border-bottom:1px solid #30363d;font-family:{_F}">'
-        f'<a href="{url}" style="color:#4493f8;text-decoration:none;font-size:13px;'
-        f'font-weight:600">{headline}</a>'
-        + (f' <span style="font-size:12px;color:#8c959f">— {brief}</span>' if brief else '')
+        f'<div style="padding:8px 0;border-bottom:1px solid #30363d;font-family:{_F}'
+        f';display:flex;align-items:flex-start;gap:10px">'
+        + (f'<span style="font-size:11px;color:#8c959f;white-space:nowrap;padding-top:2px">{time_str}</span>'
+           if time_str else '')
+        + f'<div>'
+        + (f'<a href="{url}" style="color:#4493f8;text-decoration:none;font-size:13px;font-weight:600">'
+           f'{headline}</a>'
+           if url else f'<span style="font-size:13px;font-weight:600">{headline}</span>')
+        + ent_html
+        + (f'<div style="font-size:12px;color:#8c959f;font-style:italic;margin-top:2px">"{brief_lt}"</div>'
+           if brief_lt else '')
+        + f'<div style="margin-top:3px">'
+        + _badge(signal, sig_color)
+        + (f'<span style="font-size:10px;color:#8c959f">score:{score}</span>' if score else '')
         + '</div>'
+        + '</div></div>'
     )
 
 
@@ -881,7 +1127,8 @@ def _render_tickers_table(items: list[dict]) -> str:
         what = _esc((item.get("brief_bullet") or item.get("headline_en") or "")[:120])
         for p in (item.get("public_tickers") or []):
             t = p.get("ticker", "")
-            if not t or t in seen:
+            role = (p.get("role") or "direct").lower()
+            if not t or t in seen or role != "direct":
                 continue
             seen.add(t)
             rows.append(
@@ -938,17 +1185,33 @@ def render_html(result: dict, today: dt.date) -> str:
     ]
 
     # ── A · Executive Brief ───────────────────────────────────────────
+    # Source: top 6 highest-scoring items across Top Signals + Watchlist + important liveblogs.
+    brief_pool: list[dict] = sorted(
+        top_signals + watchlist,
+        key=lambda x: -x.get("investment_score", 0),
+    )
+    # Also include high-scoring liveblog subitems (score >= _SCORE_BRIEF)
+    lb_brief = [s for s in liveblogs if s.get("investment_score", 0) >= _SCORE_BRIEF]
+    lb_brief_sorted = sorted(lb_brief, key=lambda x: -x.get("investment_score", 0))
+
     bullets = []
-    for item in top_signals[:6]:
+    used_lb = 0
+    for item in brief_pool[:6]:
         b = (item.get("brief_bullet") or "").strip()
         if not b:
-            # Fallback: use market_read, truncated cleanly at word boundary
             fallback = (item.get("market_read") or item.get("headline_en") or "").strip()
             words = fallback.split()[:22]
             b = " ".join(words)
             if not b.endswith("."):
                 b = b.rstrip(",;") + "."
         bullets.append(b)
+    # Fill up to 6 from important liveblogs if brief_pool produced fewer
+    for sub in lb_brief_sorted:
+        if len(bullets) >= 6:
+            break
+        h = (sub.get("headline_en") or "").strip()
+        if h:
+            bullets.append(h if h.endswith(".") else h + ".")
 
     if bullets:
         parts.append(f'<h2 style="{h2s}">A · Executive Brief</h2>')
@@ -980,11 +1243,10 @@ def render_html(result: dict, today: dt.date) -> str:
         parts.extend(_render_watchlist_row(i) for i in watchlist)
 
     # ── E · Dienos Pulsas / Live Market Updates ──────────────────────
-    market_lb = [i for i in liveblogs if (i.get("importance") or "low").lower() != "low"]
-    if market_lb:
+    if liveblogs:
         parts.append(f'<h2 style="{h2s}">E · Dienos Pulsas / Live Market Updates</h2>')
         parts.append(f'<div style="font-family:{_F}">')
-        parts.extend(_render_liveblog_row(i) for i in market_lb)
+        parts.extend(_render_liveblog_row(s) for s in liveblogs)
         parts.append('</div>')
 
     # ── F · Skipped / Low Relevance ───────────────────────────────────
@@ -1132,8 +1394,11 @@ def run() -> None:
     n_watch = len(result["watchlist"])
     n_lb = len(result["liveblogs"])
     n_skip = len(result["skipped"])
+    top_scores = [i.get("investment_score", 0) for i in result["top_signals"]]
+    watch_scores = [i.get("investment_score", 0) for i in result["watchlist"]]
     print(f"Extracted {len(extracted.get('items', []))} | "
-          f"Top {n_top} | Watchlist {n_watch} | Liveblogs {n_lb} | Skipped {n_skip}")
+          f"Top {n_top} scores={top_scores} | Watchlist {n_watch} scores={watch_scores} | "
+          f"Liveblogs {n_lb} | Skipped {n_skip}")
 
     html = render_html(result, now.date())
     send_email(
