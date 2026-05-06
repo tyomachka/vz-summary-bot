@@ -397,6 +397,87 @@ TICKER_MAP: dict[str, dict] = {
     "eli lilly": {"ticker": "LLY", "exchange": "NYSE", "country": "US", "cap": "mega"},
     "johnson johnson": {"ticker": "JNJ", "exchange": "NYSE", "country": "US", "cap": "mega"},
 }
+
+# Macro instruments: indices, commodities, crypto, FX, rates/bonds, ETF proxies.
+# These NEVER appear in Direct Public Tickers (section C); they go to Market Instruments.
+# Keys: lowercase normalized names and common aliases.
+INSTRUMENT_MAP: dict[str, dict] = {
+    # --- Equity Indices: US ---
+    "s&p 500": {"symbol": "SPX", "display": "S&P 500", "asset_class": "equity_index", "region": "US", "provider_symbol": "^GSPC"},
+    "sp500": {"symbol": "SPX", "display": "S&P 500", "asset_class": "equity_index", "region": "US", "provider_symbol": "^GSPC"},
+    "spx": {"symbol": "SPX", "display": "S&P 500", "asset_class": "equity_index", "region": "US", "provider_symbol": "^GSPC"},
+    "s&p500": {"symbol": "SPX", "display": "S&P 500", "asset_class": "equity_index", "region": "US", "provider_symbol": "^GSPC"},
+    "nasdaq 100": {"symbol": "NDX", "display": "Nasdaq 100", "asset_class": "equity_index", "region": "US", "provider_symbol": "^NDX"},
+    "nasdaq100": {"symbol": "NDX", "display": "Nasdaq 100", "asset_class": "equity_index", "region": "US", "provider_symbol": "^NDX"},
+    "ndx": {"symbol": "NDX", "display": "Nasdaq 100", "asset_class": "equity_index", "region": "US", "provider_symbol": "^NDX"},
+    "qqq": {"symbol": "NDX", "display": "Nasdaq 100 (QQQ ETF)", "asset_class": "equity_index", "region": "US", "provider_symbol": "QQQ"},
+    "dow jones": {"symbol": "DJIA", "display": "Dow Jones", "asset_class": "equity_index", "region": "US", "provider_symbol": "^DJI"},
+    "djia": {"symbol": "DJIA", "display": "Dow Jones", "asset_class": "equity_index", "region": "US", "provider_symbol": "^DJI"},
+    "russell 2000": {"symbol": "RUT", "display": "Russell 2000", "asset_class": "equity_index", "region": "US", "provider_symbol": "^RUT"},
+    "vix": {"symbol": "VIX", "display": "VIX (Fear Index)", "asset_class": "volatility_index", "region": "US", "provider_symbol": "^VIX"},
+    # --- Equity Indices: Europe ---
+    "euro stoxx 50": {"symbol": "SX5E", "display": "Euro Stoxx 50", "asset_class": "equity_index", "region": "EU", "provider_symbol": "^STOXX50E"},
+    "stoxx 50": {"symbol": "SX5E", "display": "Euro Stoxx 50", "asset_class": "equity_index", "region": "EU", "provider_symbol": "^STOXX50E"},
+    "dax": {"symbol": "DAX", "display": "DAX (Germany)", "asset_class": "equity_index", "region": "DE", "provider_symbol": "^GDAXI"},
+    "ftse 100": {"symbol": "UKX", "display": "FTSE 100 (UK)", "asset_class": "equity_index", "region": "GB", "provider_symbol": "^FTSE"},
+    "cac 40": {"symbol": "CAC", "display": "CAC 40 (France)", "asset_class": "equity_index", "region": "FR", "provider_symbol": "^FCHI"},
+    "cac40": {"symbol": "CAC", "display": "CAC 40 (France)", "asset_class": "equity_index", "region": "FR", "provider_symbol": "^FCHI"},
+    # --- Equity Indices: Baltic ---
+    "omx baltic": {"symbol": "OMXB", "display": "OMX Baltic GI", "asset_class": "equity_index", "region": "Baltic", "provider_symbol": "OMXBGI"},
+    "omx vilnius": {"symbol": "OMXV", "display": "OMX Vilnius GI", "asset_class": "equity_index", "region": "LT", "provider_symbol": "OMXVGI"},
+    "omx riga": {"symbol": "OMXR", "display": "OMX Riga GI", "asset_class": "equity_index", "region": "LV", "provider_symbol": "OMXRGI"},
+    "omx tallinn": {"symbol": "OMXT", "display": "OMX Tallinn GI", "asset_class": "equity_index", "region": "EE", "provider_symbol": "OMXTGI"},
+    # --- Commodities: Energy ---
+    "brent": {"symbol": "BRNT", "display": "Brent Crude Oil", "asset_class": "commodity", "region": "global", "provider_symbol": "BZ=F", "unit": "USD/bbl"},
+    "brent crude": {"symbol": "BRNT", "display": "Brent Crude Oil", "asset_class": "commodity", "region": "global", "provider_symbol": "BZ=F", "unit": "USD/bbl"},
+    "wti": {"symbol": "WTI", "display": "WTI Crude Oil", "asset_class": "commodity", "region": "global", "provider_symbol": "CL=F", "unit": "USD/bbl"},
+    "wti crude": {"symbol": "WTI", "display": "WTI Crude Oil", "asset_class": "commodity", "region": "global", "provider_symbol": "CL=F", "unit": "USD/bbl"},
+    "crude oil": {"symbol": "WTI", "display": "Crude Oil (WTI)", "asset_class": "commodity", "region": "global", "provider_symbol": "CL=F", "unit": "USD/bbl"},
+    "natural gas": {"symbol": "NATGAS", "display": "Natural Gas (Henry Hub)", "asset_class": "commodity", "region": "global", "provider_symbol": "NG=F", "unit": "USD/MMBtu"},
+    "ttf gas": {"symbol": "TTF", "display": "TTF Natural Gas (Europe)", "asset_class": "commodity", "region": "EU", "provider_symbol": "TTF", "unit": "EUR/MWh"},
+    "ttf": {"symbol": "TTF", "display": "TTF Natural Gas (Europe)", "asset_class": "commodity", "region": "EU", "provider_symbol": "TTF", "unit": "EUR/MWh"},
+    # --- Commodities: Metals ---
+    "gold": {"symbol": "GOLD", "display": "Gold", "asset_class": "commodity", "region": "global", "provider_symbol": "GC=F", "unit": "USD/oz"},
+    "silver": {"symbol": "SILVER", "display": "Silver", "asset_class": "commodity", "region": "global", "provider_symbol": "SI=F", "unit": "USD/oz"},
+    "copper": {"symbol": "COPPER", "display": "Copper", "asset_class": "commodity", "region": "global", "provider_symbol": "HG=F", "unit": "USD/lb"},
+    # --- Commodities: Agriculture ---
+    "wheat": {"symbol": "WHEAT", "display": "Wheat (CBOT)", "asset_class": "commodity", "region": "global", "provider_symbol": "ZW=F", "unit": "USD/bu"},
+    "corn": {"symbol": "CORN", "display": "Corn (CBOT)", "asset_class": "commodity", "region": "global", "provider_symbol": "ZC=F", "unit": "USD/bu"},
+    "soybeans": {"symbol": "SOYB", "display": "Soybeans (CBOT)", "asset_class": "commodity", "region": "global", "provider_symbol": "ZS=F", "unit": "USD/bu"},
+    # --- Crypto ---
+    "bitcoin": {"symbol": "BTC", "display": "Bitcoin", "asset_class": "crypto", "region": "global", "provider_symbol": "BTC-USD"},
+    "btc": {"symbol": "BTC", "display": "Bitcoin", "asset_class": "crypto", "region": "global", "provider_symbol": "BTC-USD"},
+    "ethereum": {"symbol": "ETH", "display": "Ethereum", "asset_class": "crypto", "region": "global", "provider_symbol": "ETH-USD"},
+    "eth": {"symbol": "ETH", "display": "Ethereum", "asset_class": "crypto", "region": "global", "provider_symbol": "ETH-USD"},
+    # --- FX ---
+    "eur/usd": {"symbol": "EURUSD", "display": "EUR/USD", "asset_class": "fx", "region": "global", "provider_symbol": "EURUSD=X"},
+    "eurusd": {"symbol": "EURUSD", "display": "EUR/USD", "asset_class": "fx", "region": "global", "provider_symbol": "EURUSD=X"},
+    "usd/eur": {"symbol": "EURUSD", "display": "EUR/USD", "asset_class": "fx", "region": "global", "provider_symbol": "EURUSD=X"},
+    "usd/jpy": {"symbol": "USDJPY", "display": "USD/JPY", "asset_class": "fx", "region": "global", "provider_symbol": "JPY=X"},
+    "usdjpy": {"symbol": "USDJPY", "display": "USD/JPY", "asset_class": "fx", "region": "global", "provider_symbol": "JPY=X"},
+    "gbp/usd": {"symbol": "GBPUSD", "display": "GBP/USD", "asset_class": "fx", "region": "global", "provider_symbol": "GBPUSD=X"},
+    "gbpusd": {"symbol": "GBPUSD", "display": "GBP/USD", "asset_class": "fx", "region": "global", "provider_symbol": "GBPUSD=X"},
+    "usd/rub": {"symbol": "USDRUB", "display": "USD/RUB", "asset_class": "fx", "region": "global", "provider_symbol": "RUB=X"},
+    "usdrub": {"symbol": "USDRUB", "display": "USD/RUB", "asset_class": "fx", "region": "global", "provider_symbol": "RUB=X"},
+    "dollar index": {"symbol": "DXY", "display": "US Dollar Index (DXY)", "asset_class": "fx", "region": "US", "provider_symbol": "DX-Y.NYB"},
+    "dxy": {"symbol": "DXY", "display": "US Dollar Index (DXY)", "asset_class": "fx", "region": "US", "provider_symbol": "DX-Y.NYB"},
+    # --- Rates / Bonds ---
+    "us10y": {"symbol": "US10Y", "display": "US 10Y Treasury Yield", "asset_class": "rates", "region": "US", "provider_symbol": "^TNX", "unit": "%"},
+    "us 10y": {"symbol": "US10Y", "display": "US 10Y Treasury Yield", "asset_class": "rates", "region": "US", "provider_symbol": "^TNX", "unit": "%"},
+    "us 10-year": {"symbol": "US10Y", "display": "US 10Y Treasury Yield", "asset_class": "rates", "region": "US", "provider_symbol": "^TNX", "unit": "%"},
+    "us2y": {"symbol": "US2Y", "display": "US 2Y Treasury Yield", "asset_class": "rates", "region": "US", "provider_symbol": "^IRX", "unit": "%"},
+    "us 2y": {"symbol": "US2Y", "display": "US 2Y Treasury Yield", "asset_class": "rates", "region": "US", "provider_symbol": "^IRX", "unit": "%"},
+    "bund": {"symbol": "DE10Y", "display": "German 10Y Bund Yield", "asset_class": "rates", "region": "DE", "provider_symbol": "^BUND", "unit": "%"},
+    "german 10y": {"symbol": "DE10Y", "display": "German 10Y Bund Yield", "asset_class": "rates", "region": "DE", "provider_symbol": "^BUND", "unit": "%"},
+    "euribor": {"symbol": "EURIBOR", "display": "EURIBOR", "asset_class": "rates", "region": "EU", "provider_symbol": "EURIBOR", "unit": "%"},
+    # --- ETF Proxies ---
+    "spy": {"symbol": "SPY", "display": "SPDR S&P 500 ETF", "asset_class": "etf", "region": "US", "provider_symbol": "SPY"},
+    "iwm": {"symbol": "IWM", "display": "iShares Russell 2000 ETF", "asset_class": "etf", "region": "US", "provider_symbol": "IWM"},
+    "eem": {"symbol": "EEM", "display": "iShares MSCI EM ETF", "asset_class": "etf", "region": "EM", "provider_symbol": "EEM"},
+    "gld": {"symbol": "GLD", "display": "SPDR Gold ETF", "asset_class": "etf", "region": "global", "provider_symbol": "GLD"},
+    "xle": {"symbol": "XLE", "display": "Energy Select Sector SPDR ETF", "asset_class": "etf", "region": "US", "provider_symbol": "XLE"},
+}
+
 _BALTIC_COUNTRIES = {"LT", "LV", "EE"}
 
 ROOT = Path(__file__).parent
@@ -672,6 +753,25 @@ related/background tickers are shown inside the card only.
 • Never invent ticker symbols — Python validates names against a static map.
 
 ═══════════════════════════════════════════
+STEP 6B — MARKET INSTRUMENTS:
+If the article discusses macro instruments (equity indices, commodities, crypto, FX pairs,
+interest rates, bond yields) with directional context, list them in candidate_instruments.
+• direction: how the article implies the instrument is moving or will move.
+  bullish  = rising / positive outlook for that instrument
+  bearish  = falling / negative outlook
+  mixed    = conflicting signals in same article
+  neutral  = mentioned without clear direction
+  unclear  = cannot determine from article text
+• Examples:
+  "Brent zemiau 80 USD/bbl" → {"name": "Brent", "direction": "bearish"}
+  "S&P 500 pasieke rekordini maksimuma" → {"name": "S&P 500", "direction": "bullish"}
+  "JAV 10 metu obligaciju pajamingumas kyla" → {"name": "US10Y", "direction": "bearish"}
+  "EUR/USD kursas stabilizavosi" → {"name": "EUR/USD", "direction": "neutral"}
+• Do NOT place indices, crypto, commodities, FX pairs, or rates into candidate_companies.
+• Omit candidate_instruments (or leave as []) if no macro instruments appear with
+  directional context.
+
+═══════════════════════════════════════════
 STEP 7 — SIGNALS:
 • signal_fundamental: your analysis of the event's investment quality.
   Values: bullish | bearish | mixed | neutral | unclear
@@ -740,6 +840,7 @@ JSON SCHEMA (one object per article):
   "evidence_lt": ["<verbatim LT substring, ≤12 words, prefer numeric snippets>", ...],
   "market_read": "<2–3 EN sentences; numbers must appear in evidence_lt; no BUY/SELL/HOLD>",
   "candidate_companies": [{"name": "<as written>", "role": "direct|related|background|comparison_only|private"}, ...],
+  "candidate_instruments": [{"name": "<instrument as mentioned>", "direction": "bullish|bearish|mixed|neutral|unclear"}],
   "ticker_proxies": ["<company not in article but useful sector proxy>"],
   "affected_direct": ["<companies/sectors/countries directly involved>"],
   "affected_indirect": ["<assets/markets possibly affected>"],
@@ -1024,6 +1125,45 @@ def _lookup_ticker(name: str) -> dict | None:
     return None
 
 
+def _normalize_instrument_name(name: str) -> str:
+    """Lowercase, collapse whitespace. Preserves / so EUR/USD stays intact."""
+    if not name:
+        return ""
+    name = name.lower().strip()
+    name = re.sub(r"\s+", " ", name)
+    return name.rstrip(".,;:")
+
+
+def _lookup_instrument(name: str) -> dict | None:
+    """Two-pass lookup against INSTRUMENT_MAP: exact normalized, then substring (key >= 4 chars)."""
+    if not name:
+        return None
+    query = _normalize_instrument_name(name)
+    query_na = _remove_accents(query)
+
+    norm_map = {_normalize_instrument_name(k): v for k, v in INSTRUMENT_MAP.items()}
+
+    # Pass 1: exact normalized match
+    if query in norm_map:
+        return norm_map[query]
+
+    # Pass 2: accent-insensitive exact match
+    for key, value in norm_map.items():
+        if _remove_accents(key) == query_na:
+            return value
+
+    # Pass 3: substring match (keys >= 4 chars)
+    for key, value in norm_map.items():
+        if len(key) < 4:
+            continue
+        key_na = _remove_accents(key)
+        if key in query or query in key:
+            return value
+        if key_na in query_na or query_na in key_na:
+            return value
+
+    return None
+
 
 def _theme_key(item: dict) -> str:
     """Group items by primary entity for theme-based dedup."""
@@ -1112,6 +1252,27 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         item["companies_private"] = companies_private
         item["tickers_unclear"] = tickers_unclear
         item["is_baltic"] = any(p.get("country") in _BALTIC_COUNTRIES for p in public)
+
+        # Instrument resolution — candidate_instruments lists macro instruments (indices, FX, etc.)
+        raw_instruments = item.get("candidate_instruments") or []
+        resolved_instr: list[dict] = []
+        seen_instr_syms: set[str] = set()
+        for instr in raw_instruments:
+            if isinstance(instr, dict):
+                iname = (instr.get("name") or "").strip()
+                idirection = (instr.get("direction") or "unclear").strip().lower()
+            else:
+                iname = str(instr).strip()
+                idirection = "unclear"
+            if not iname:
+                continue
+            iinfo = _lookup_instrument(iname)
+            if iinfo:
+                isym = iinfo.get("symbol", "")
+                if isym and isym not in seen_instr_syms:
+                    resolved_instr.append({**iinfo, "direction": idirection, "raw_name": iname})
+                    seen_instr_syms.add(isym)
+        item["resolved_instruments"] = resolved_instr
 
         # Opinion types: cap confidence at medium
         if a_type in _OPINION_TYPES:
@@ -1265,10 +1426,55 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
 
     market_subitems.sort(key=lambda x: (x.get("time") or "00:00"))
 
+    # ── Pass 9: aggregate market instruments across all validated items ─────
+    instruments_by_symbol: dict[str, dict] = {}
+    for item in top_signals + watchlist:
+        for ri in (item.get("resolved_instruments") or []):
+            sym = ri.get("symbol", "")
+            if not sym:
+                continue
+            if sym not in instruments_by_symbol:
+                instruments_by_symbol[sym] = {
+                    k: v for k, v in ri.items() if k not in ("direction", "raw_name")
+                }
+                instruments_by_symbol[sym]["directions"] = []
+                instruments_by_symbol[sym]["evidence_articles"] = []
+            instruments_by_symbol[sym]["directions"].append(ri.get("direction", "unclear"))
+            instruments_by_symbol[sym]["evidence_articles"].append({
+                "url": item.get("url", ""),
+                "headline_en": item.get("headline_en", ""),
+                "evidence_lt": (item.get("evidence_lt") or [])[:3],
+                "market_read": item.get("market_read", ""),
+                "affected_direct": item.get("affected_direct") or [],
+                "affected_indirect": item.get("affected_indirect") or [],
+            })
+
+    def _merge_directions(dirs: list[str]) -> str:
+        real = {d for d in dirs if d != "unclear"}
+        if not real:
+            return "unclear"
+        if len(real) == 1:
+            return next(iter(real))
+        return "mixed"
+
+    _INSTR_CLASS_ORDER = {
+        "equity_index": 0, "volatility_index": 1, "commodity": 2,
+        "fx": 3, "rates": 4, "crypto": 5, "etf": 6,
+    }
+    instruments_list: list[dict] = []
+    for sym, data in instruments_by_symbol.items():
+        data["direction"] = _merge_directions(data["directions"])
+        instruments_list.append(data)
+    instruments_list.sort(key=lambda x: (
+        _INSTR_CLASS_ORDER.get(x.get("asset_class", ""), 99),
+        x.get("symbol", ""),
+    ))
+
     return {
         "top_signals": top_signals,
         "watchlist": watchlist,
         "liveblogs": market_subitems,
+        "instruments": instruments_list,
         "skipped": skipped,
     }
 
@@ -1508,10 +1714,128 @@ def _render_tickers_table(items: list[dict]) -> str:
     )
 
 
+_ASSET_CLASS_LABELS: dict[str, str] = {
+    "equity_index": "Index",
+    "volatility_index": "Volatility",
+    "commodity": "Commodity",
+    "fx": "FX",
+    "rates": "Rates",
+    "crypto": "Crypto",
+    "etf": "ETF",
+}
+_DIR_COLORS = {
+    "bullish": "#1a7f37", "bearish": "#cf222e",
+    "mixed": "#9a6700", "neutral": "#57606a", "unclear": "#8c959f",
+}
+
+
+def _render_instruments_section(instruments: list[dict]) -> str:
+    """Render Market Instruments mini-cards (one per resolved instrument)."""
+    if not instruments:
+        return ""
+    parts: list[str] = []
+    for instr in instruments:
+        display = _esc(instr.get("display") or instr.get("symbol") or "")
+        symbol = _esc(instr.get("symbol") or "")
+        asset_class = instr.get("asset_class") or ""
+        ac_label = _ASSET_CLASS_LABELS.get(asset_class, asset_class.replace("_", " ").title())
+        direction = (instr.get("direction") or "unclear").lower()
+        unit = instr.get("unit") or ""
+        evidence_arts = instr.get("evidence_articles") or []
+
+        # Collect unique evidence snippets and market_read across contributing articles
+        all_evidence: list[str] = []
+        seen_ev: set[str] = set()
+        market_reads: list[str] = []
+        affected_direct_all: list[str] = []
+        affected_indirect_all: list[str] = []
+        article_links: list[str] = []
+        for art in evidence_arts:
+            for snip in (art.get("evidence_lt") or []):
+                norm = " ".join(snip.split()).lower()
+                if norm not in seen_ev:
+                    seen_ev.add(norm)
+                    all_evidence.append(snip)
+            mr = (art.get("market_read") or "").strip()
+            if mr and mr not in market_reads:
+                market_reads.append(mr)
+            for d in (art.get("affected_direct") or []):
+                if d not in affected_direct_all:
+                    affected_direct_all.append(d)
+            for d in (art.get("affected_indirect") or []):
+                if d not in affected_indirect_all:
+                    affected_indirect_all.append(d)
+            url = art.get("url") or ""
+            headline = art.get("headline_en") or ""
+            if url and headline:
+                article_links.append(
+                    f'<a href="{_esc(url)}" style="color:#4493f8;text-decoration:none">'
+                    f'{_esc(headline)}</a>'
+                )
+
+        ev_html = "".join(
+            f'<div style="margin:2px 0">• &ldquo;{_esc(s)}&rdquo;</div>'
+            for s in all_evidence[:5]
+        )
+        affected_parts: list[str] = []
+        if affected_direct_all:
+            affected_parts.append(
+                f'<strong>Direct:</strong> {_join(affected_direct_all[:4])}'
+            )
+        if affected_indirect_all:
+            affected_parts.append(
+                f'<strong>Indirect:</strong> {_join(affected_indirect_all[:4])}'
+            )
+        affected_html = " &nbsp;|&nbsp; ".join(affected_parts) if affected_parts else ""
+
+        parts.append(
+            f'<div style="border:1px solid #444c56;border-radius:6px;padding:12px 16px;'
+            f'margin:0 0 12px;font-family:{_F};max-width:680px">'
+            # header row
+            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;'
+            f'flex-wrap:wrap">'
+            f'<span style="font-size:14px;font-weight:700;color:#cdd0d4">{display}</span>'
+            f'<span style="font-size:11px;color:#8c959f">{symbol}</span>'
+            + (f'<span style="font-size:11px;color:#8c959f">{_esc(unit)}</span>' if unit else "")
+            + _badge(ac_label, "#0969da")
+            + _badge(direction, _DIR_COLORS.get(direction, "#8c959f"))
+            + "</div>"
+            # evidence
+            + (
+                f'<div style="padding:6px 10px;border-left:3px solid #30363d;'
+                f'color:#8c959f;font-size:12px;font-style:italic;margin-bottom:8px">'
+                + ev_html + "</div>"
+                if ev_html else ""
+            )
+            # market read (first contributing article's)
+            + (
+                f'<div style="font-size:13px;color:#cdd0d4;margin-bottom:8px">'
+                f'<strong>Why it matters:</strong> {_esc(market_reads[0])}</div>'
+                if market_reads else ""
+            )
+            # affected sectors / companies
+            + (
+                f'<div style="font-size:12px;color:#8c959f;margin-bottom:6px">'
+                f'<strong>Affected:</strong> {affected_html}</div>'
+                if affected_html else ""
+            )
+            # source article links
+            + (
+                f'<div style="font-size:11px;color:#8c959f">'
+                + " · ".join(article_links[:2])
+                + "</div>"
+                if article_links else ""
+            )
+            + "</div>"
+        )
+    return "".join(parts)
+
+
 def render_html(result: dict, today: dt.date) -> str:
     top_signals: list[dict] = result.get("top_signals") or []
     watchlist: list[dict] = result.get("watchlist") or []
     liveblogs: list[dict] = result.get("liveblogs") or []
+    instruments: list[dict] = result.get("instruments") or []
     skipped: list[dict] = result.get("skipped") or []
     all_main = top_signals + watchlist
 
@@ -1582,6 +1906,12 @@ def render_html(result: dict, today: dt.date) -> str:
     if ticker_table:
         parts.append(f'<h2 style="{h2s}">C · Direct Public Tickers</h2>')
         parts.append(ticker_table)
+
+    # ── C2 · Market Instruments ───────────────────────────────────────
+    instr_html = _render_instruments_section(instruments)
+    if instr_html:
+        parts.append(f'<h2 style="{h2s}">C2 · Market Instruments</h2>')
+        parts.append(instr_html)
 
     # ── D · Macro / Sector / Private Watchlist ────────────────────────
     if watchlist:
