@@ -966,9 +966,15 @@ def gemini_extract(articles: list[dict]) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        i, j = text.find("{"), text.rfind("}")
-        if i >= 0 and j > i:
-            return json.loads(text[i:j + 1])
+        # Gemini sometimes emits two concatenated JSON objects; raw_decode stops
+        # at the first valid document boundary and ignores trailing content.
+        i = text.find("{")
+        if i >= 0:
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(text, i)
+                return obj
+            except json.JSONDecodeError:
+                pass
         raise
 
 
