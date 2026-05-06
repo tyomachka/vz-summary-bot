@@ -14,6 +14,7 @@ import re
 import smtplib
 import sys
 import time
+import unicodedata
 import traceback
 from email.message import EmailMessage
 from pathlib import Path
@@ -42,23 +43,25 @@ _FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-fla
 # Extend this dict over time as new names appear.
 TICKER_MAP: dict[str, dict] = {
     # --- Nasdaq Baltic Main + Secondary (Lithuania) ---
-    "apranga": {"ticker": "APG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "apranga": {"ticker": "APG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
     "ignitis grupė": {"ticker": "IGN1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
     "ignitis": {"ticker": "IGN1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
     "telia lietuva": {"ticker": "TEL1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
-    "šiaulių bankas": {"ticker": "SAB1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
-    "siauliu bankas": {"ticker": "SAB1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "artea bankas": {"ticker": "ROE1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "šiaulių bankas": {"ticker": "ROE1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "siauliu bankas": {"ticker": "ROE1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
     "auga group": {"ticker": "AUG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
     "grigeo": {"ticker": "GRG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
-    "klaipėdos nafta": {"ticker": "KNF1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
-    "kn energies": {"ticker": "KNF1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "klaipėdos nafta": {"ticker": "KNE1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "klaipedos nafta": {"ticker": "KNE1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "kn energies": {"ticker": "KNE1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
     "panevėžio statybos trestas": {"ticker": "PTR1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
     "pieno žvaigždės": {"ticker": "PZV1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
     "rokiškio sūris": {"ticker": "RSU1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
     "snaigė": {"ticker": "SNG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
     "vilkyškių pieninė": {"ticker": "VLP1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
     "litgrid": {"ticker": "LGD1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
-    "akropolis group": {"ticker": "APG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "akropolis group": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
     # --- Nasdaq Baltic (Latvia) ---
     "citadele": {"ticker": "CBL", "exchange": "Nasdaq Riga", "country": "LV", "cap": "mid"},
     "latvijas gāze": {"ticker": "GZE1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "small"},
@@ -109,13 +112,12 @@ TICKER_MAP: dict[str, dict] = {
     "pinterest": {"ticker": "PINS", "exchange": "NYSE", "country": "US", "cap": "mid"},
     "conocophillips": {"ticker": "COP", "exchange": "NYSE", "country": "US", "cap": "large"},
     "conoco": {"ticker": "COP", "exchange": "NYSE", "country": "US", "cap": "large"},
-    "ebay": {"ticker": "EBAY", "exchange": "Nasdaq", "country": "US", "cap": "large"},
-    "gamestop": {"ticker": "GME", "exchange": "NYSE", "country": "US", "cap": "small"},
-    "openai": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
-    "spacex": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
-    "stripe": {"ticker": "N/A private", "exchange": "—", "country": "US", "cap": "—"},
-    "huawei": {"ticker": "N/A private", "exchange": "—", "country": "CN", "cap": "—"},
-    "msc": {"ticker": "N/A private", "exchange": "—", "country": "CH", "cap": "—"},
+    "openai": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "spacex": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "stripe": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "huawei": {"ticker": "N/A private", "exchange": "N/A", "country": "CN", "cap": "private"},
+    "msc": {"ticker": "N/A private", "exchange": "N/A", "country": "CH", "cap": "private"},
+    "mediterranean shipping": {"ticker": "N/A private", "exchange": "N/A", "country": "CH", "cap": "private"},
     # --- Europe ---
     "asml": {"ticker": "ASML", "exchange": "Euronext Amsterdam", "country": "NL", "cap": "mega"},
     "lvmh": {"ticker": "MC", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
@@ -135,6 +137,151 @@ TICKER_MAP: dict[str, dict] = {
     "tencent": {"ticker": "0700", "exchange": "HKEX", "country": "CN", "cap": "mega"},
     "byd": {"ticker": "1211", "exchange": "HKEX", "country": "CN", "cap": "large"},
     "zte": {"ticker": "0763", "exchange": "HKEX", "country": "CN", "cap": "mid"},
+    "sk hynix": {"ticker": "000660", "exchange": "KRX", "country": "KR", "cap": "mega"},
+    # --- Nasdaq Vilnius (additional LT listed) ---
+    "akola": {"ticker": "AKO1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "linas agro": {"ticker": "AKO1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "amber grid": {"ticker": "AMG1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "invalda": {"ticker": "IVL1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "mid"},
+    "invl technology": {"ticker": "INC1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "invl baltic real estate": {"ticker": "INR1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "invl baltic farmland": {"ticker": "INL1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "kauno energija": {"ticker": "KNR1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "novaturas": {"ticker": "NTU1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "žemaitijos pienas": {"ticker": "ZMP1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "zemaitijos pienas": {"ticker": "ZMP1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "utenos trikotažas": {"ticker": "UTR1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "utenos trikotazas": {"ticker": "UTR1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "micro"},
+    "vilniaus baldai": {"ticker": "VBL1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "east west agro": {"ticker": "EWA1L", "exchange": "Nasdaq Vilnius", "country": "LT", "cap": "small"},
+    "neo finance": {"ticker": "NEOFI", "exchange": "Nasdaq Vilnius First North", "country": "LT", "cap": "small"},
+    "k2 lt": {"ticker": "K2LT", "exchange": "Nasdaq Vilnius First North", "country": "LT", "cap": "small"},
+    # --- Nasdaq Tallinn (additional EE listed) ---
+    "infortar": {"ticker": "INF1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "large"},
+    "eften": {"ticker": "EFT1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "mid"},
+    "arco vara": {"ticker": "ARC1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "micro"},
+    "hepsor": {"ticker": "HPR1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "micro"},
+    "nordecon": {"ticker": "NCN1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "micro"},
+    "pro kapital": {"ticker": "PKG1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "ekspress grupp": {"ticker": "EEG1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "silvano": {"ticker": "SFG1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "prfoods": {"ticker": "PRF1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "micro"},
+    "nordic fibreboard": {"ticker": "SKN1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "micro"},
+    "trigon property": {"ticker": "TPD1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "micro"},
+    "textmagic": {"ticker": "MAGIC", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "small"},
+    "airobot": {"ticker": "AIR", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "micro"},
+    "modera": {"ticker": "MODE", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "small"},
+    "saunum": {"ticker": "SAUNA", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "small"},
+    # --- Nasdaq Riga (additional LV listed) ---
+    "delfingroup": {"ticker": "DGR1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "small"},
+    "eleving": {"ticker": "ELEVR", "exchange": "Nasdaq Riga", "country": "LV", "cap": "mid"},
+    "indexo": {"ticker": "IDX1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "small"},
+    "saf tehnika": {"ticker": "SAF1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "small"},
+    "amber latvijas balzams": {"ticker": "BAL1R", "exchange": "Nasdaq Riga", "country": "LV", "cap": "micro"},
+    "virši": {"ticker": "VIRSI", "exchange": "Nasdaq Riga First North", "country": "LV", "cap": "small"},
+    "virsi": {"ticker": "VIRSI", "exchange": "Nasdaq Riga First North", "country": "LV", "cap": "small"},
+    "madara": {"ticker": "MDARA", "exchange": "Nasdaq Riga First North", "country": "LV", "cap": "small"},
+    "kalve coffee": {"ticker": "KALVE", "exchange": "Nasdaq Riga First North", "country": "LV", "cap": "small"},
+    # --- Europe: banks / finance / fintech ---
+    "lloyds": {"ticker": "LLOY", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "barclays": {"ticker": "BARC", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "hsbc": {"ticker": "HSBA", "exchange": "London Stock Exchange", "country": "GB", "cap": "mega"},
+    "danske bank": {"ticker": "DANSKE", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "dnb": {"ticker": "DNB", "exchange": "Oslo Børs", "country": "NO", "cap": "large"},
+    "wise": {"ticker": "WISE", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    # --- Europe: energy / utilities ---
+    "orlen": {"ticker": "PKN", "exchange": "Warsaw Stock Exchange", "country": "PL", "cap": "large"},
+    "equinor": {"ticker": "EQNR", "exchange": "Oslo Børs", "country": "NO", "cap": "mega"},
+    "neste": {"ticker": "NESTE", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
+    "fortum": {"ticker": "FORTUM", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
+    "orsted": {"ticker": "ORSTED", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "ørsted": {"ticker": "ORSTED", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "vestas": {"ticker": "VWS", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "rwe": {"ticker": "RWE", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "e.on": {"ticker": "EOAN", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "shell": {"ticker": "SHEL", "exchange": "London Stock Exchange", "country": "GB", "cap": "mega"},
+    "bp": {"ticker": "BP.", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "totalenergies": {"ticker": "TTE", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    # --- Europe: logistics / transport ---
+    "maersk": {"ticker": "MAERSK-B", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "møller mærsk": {"ticker": "MAERSK-B", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "moller maersk": {"ticker": "MAERSK-B", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "hapag-lloyd": {"ticker": "HLAG", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "dsv": {"ticker": "DSV", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "large"},
+    "dhl group": {"ticker": "DHL", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "kuehne": {"ticker": "KNIN", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "large"},
+    "ryanair": {"ticker": "RYA", "exchange": "Euronext Dublin", "country": "IE", "cap": "large"},
+    "wizz air": {"ticker": "WIZZ", "exchange": "London Stock Exchange", "country": "GB", "cap": "mid"},
+    # --- Europe: defense / industrials ---
+    "rheinmetall": {"ticker": "RHM", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "bae systems": {"ticker": "BA.", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "saab": {"ticker": "SAAB-B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "leonardo": {"ticker": "LDO", "exchange": "Borsa Italiana", "country": "IT", "cap": "large"},
+    "thales": {"ticker": "HO", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "kongsberg": {"ticker": "KOG", "exchange": "Oslo Børs", "country": "NO", "cap": "large"},
+    "airbus": {"ticker": "AIR", "exchange": "Euronext Paris", "country": "NL", "cap": "mega"},
+    # --- Europe: telcos / tech ---
+    "telia company": {"ticker": "TELIA", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "tele2": {"ticker": "TEL2-B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "ericsson": {"ticker": "ERIC-B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "nokia": {"ticker": "NOKIA", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
+    "deutsche telekom": {"ticker": "DTE", "exchange": "Xetra", "country": "DE", "cap": "mega"},
+    "orange": {"ticker": "ORA", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    # --- Global: semiconductors / AI infrastructure ---
+    "broadcom": {"ticker": "AVGO", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "qualcomm": {"ticker": "QCOM", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "arm holdings": {"ticker": "ARM", "exchange": "Nasdaq", "country": "GB", "cap": "large"},
+    "super micro": {"ticker": "SMCI", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "applied materials": {"ticker": "AMAT", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "lam research": {"ticker": "LRCX", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    # --- Global: commodities / agriculture ---
+    "glencore": {"ticker": "GLEN", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "bunge": {"ticker": "BG", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "archer-daniels": {"ticker": "ADM", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "freeport": {"ticker": "FCX", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "rio tinto": {"ticker": "RIO", "exchange": "London Stock Exchange", "country": "GB", "cap": "mega"},
+    # --- US: defense ---
+    "northrop": {"ticker": "NOC", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "general dynamics": {"ticker": "GD", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "l3harris": {"ticker": "LHX", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "huntington ingalls": {"ticker": "HII", "exchange": "NYSE", "country": "US", "cap": "mid"},
+    # --- US: retail / consumer ---
+    "walmart": {"ticker": "WMT", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "costco": {"ticker": "COST", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "target": {"ticker": "TGT", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "home depot": {"ticker": "HD", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "pdd": {"ticker": "PDD", "exchange": "Nasdaq", "country": "CN", "cap": "large"},
+    "jd.com": {"ticker": "JD", "exchange": "Nasdaq", "country": "CN", "cap": "large"},
+    "mercadolibre": {"ticker": "MELI", "exchange": "Nasdaq", "country": "UY", "cap": "large"},
+    # --- Global: autos ---
+    "stellantis": {"ticker": "STLAM", "exchange": "Borsa Italiana", "country": "NL", "cap": "large"},
+    "renault": {"ticker": "RNO", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "volvo": {"ticker": "VOLV-B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    # --- Baltic / regional private & state-owned ---
+    "elektrum lietuva": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "latvenergo": {"ticker": "N/A private", "exchange": "N/A", "country": "LV", "cap": "state-owned"},
+    "enefit": {"ticker": "N/A private", "exchange": "N/A", "country": "EE", "cap": "state-owned"},
+    "eesti energia": {"ticker": "N/A private", "exchange": "N/A", "country": "EE", "cap": "state-owned"},
+    "luminor": {"ticker": "N/A private", "exchange": "N/A", "country": "EE", "cap": "private"},
+    "curve europe": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "mantinga": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "civinity": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "detonas": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "state-owned"},
+    "ltg": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "state-owned"},
+    "lietuvos geležinkeliai": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "state-owned"},
+    "lietuvos gelezinkeliai": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "state-owned"},
+    # --- Global private ---
+    "cma cgm": {"ticker": "N/A private", "exchange": "N/A", "country": "FR", "cap": "private"},
+    "dp world": {"ticker": "N/A private", "exchange": "N/A", "country": "AE", "cap": "state-owned"},
+    "vitol": {"ticker": "N/A private", "exchange": "N/A", "country": "CH", "cap": "private"},
+    "trafigura": {"ticker": "N/A private", "exchange": "N/A", "country": "SG", "cap": "private"},
+    "gunvor": {"ticker": "N/A private", "exchange": "N/A", "country": "CH", "cap": "private"},
+    "cargill": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "anthropic": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "anduril": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "databricks": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
+    "revolut": {"ticker": "N/A private", "exchange": "N/A", "country": "GB", "cap": "private"},
+    "klarna": {"ticker": "N/A private", "exchange": "N/A", "country": "SE", "cap": "private"},
 }
 _BALTIC_COUNTRIES = {"LT", "LV", "EE"}
 
@@ -664,17 +811,63 @@ def _validate_numbers_against_evidence(item: dict) -> None:
                 item[field] = text
 
 
+def _normalize_company_name(name: str) -> str:
+    """Lowercase + strip Lithuanian quotes/punctuation/extra whitespace."""
+    if not name:
+        return ""
+    name = name.lower()
+    for old, new in [
+        ("„", ""), ("“", ""), ("”", ""), ('"', ""),
+        ("‘", ""), ("’", ""), ("'", ""),
+        ("–", "-"), ("—", "-"), ("…", ""),
+    ]:
+        name = name.replace(old, new)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def _remove_accents(text: str) -> str:
+    """Strip combining diacritics (ą→a, š→s, ž→z, etc.)."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
+
+
 def _lookup_ticker(name: str) -> dict | None:
+    """
+    Three-pass lookup against TICKER_MAP:
+    1. Normalized exact match (lowercase, no LT quotes/punctuation)
+    2. Accent-insensitive exact match (ą→a, š→s, ž→z, etc.)
+    3. Substring match — only for keys ≥5 chars (prevents "ing" matching "banking")
+       Both normalized and accent-stripped forms are tried.
+    """
     if not name:
         return None
-    n = name.strip().lower()
-    if n in TICKER_MAP:
-        return TICKER_MAP[n]
-    for key, info in TICKER_MAP.items():
-        # Require key length ≥5 for substring matching to avoid false positives
-        # (e.g. "ing" matching "banking", "trading", "investing").
-        if len(key) >= 5 and (key in n or n in key):
-            return info
+    query = _normalize_company_name(name)
+    query_na = _remove_accents(query)
+
+    # Build normalized view of the map (small dict, cheap)
+    norm_map = {_normalize_company_name(k): v for k, v in TICKER_MAP.items()}
+
+    # Pass 1: exact normalized match
+    if query in norm_map:
+        return norm_map[query]
+
+    # Pass 2: accent-insensitive exact match
+    for key, value in norm_map.items():
+        if _remove_accents(key) == query_na:
+            return value
+
+    # Pass 3: substring match (keys ≥5 chars only)
+    for key, value in norm_map.items():
+        if len(key) < 5:
+            continue
+        key_na = _remove_accents(key)
+        if key in query or query in key:
+            return value
+        if key_na in query_na or query_na in key_na:
+            return value
+
     return None
 
 
