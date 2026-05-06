@@ -282,6 +282,120 @@ TICKER_MAP: dict[str, dict] = {
     "databricks": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "private"},
     "revolut": {"ticker": "N/A private", "exchange": "N/A", "country": "GB", "cap": "private"},
     "klarna": {"ticker": "N/A private", "exchange": "N/A", "country": "SE", "cap": "private"},
+    # --- Baltic First North / smaller names ---
+    "liven": {"ticker": "LVN1T", "exchange": "Nasdaq Tallinn", "country": "EE", "cap": "small"},
+    "agrova baltics": {"ticker": "EGG", "exchange": "Nasdaq Riga First North", "country": "LV", "cap": "small"},
+    "bercman technologies": {"ticker": "BERCM", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "micro"},
+    "punktid technologies": {"ticker": "PNKTD", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "micro"},
+    "primostar group": {"ticker": "PRIMO", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "small"},
+    "j molner": {"ticker": "MOLNR", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "small"},
+    "j. molner": {"ticker": "MOLNR", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "small"},
+    "robus group": {"ticker": "ROBUS", "exchange": "Nasdaq Tallinn First North", "country": "EE", "cap": "micro"},
+    "city service": {"ticker": "CTS1L", "exchange": "Nasdaq Vilnius First North", "country": "LT", "cap": "micro"},
+    # --- LT/Baltic subsidiary or private (must NOT enter section C even if parent is listed) ---
+    "orlen lietuva": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "subsidiary-private"},
+    "maxima grupė": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "maxima grupe": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "vilniaus prekyba": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "sanitex": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "rimi lietuva": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "lidl lietuva": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "circle k lietuva": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "subsidiary-private"},
+    "circle k": {"ticker": "N/A private", "exchange": "N/A", "country": "US", "cap": "subsidiary-private"},
+    "revolut bank": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "vėjomaina": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "vejomaina": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "realco": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "citus": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "eika": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    "omberg group": {"ticker": "N/A private", "exchange": "N/A", "country": "LT", "cap": "private"},
+    # --- Europe: banks / finance ---
+    "bnp paribas": {"ticker": "BNP", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "société générale": {"ticker": "GLE", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "societe generale": {"ticker": "GLE", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "santander": {"ticker": "SAN", "exchange": "BME Madrid", "country": "ES", "cap": "large"},
+    "unicredit": {"ticker": "UCG", "exchange": "Borsa Italiana", "country": "IT", "cap": "large"},
+    "intesa sanpaolo": {"ticker": "ISP", "exchange": "Borsa Italiana", "country": "IT", "cap": "large"},
+    "ubs group": {"ticker": "UBSG", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "large"},
+    "commerzbank": {"ticker": "CBK", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "erste group": {"ticker": "EBS", "exchange": "Vienna Stock Exchange", "country": "AT", "cap": "large"},
+    "raiffeisen bank": {"ticker": "RBI", "exchange": "Vienna Stock Exchange", "country": "AT", "cap": "large"},
+    "deutsche boerse": {"ticker": "DB1", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "deutsche börse": {"ticker": "DB1", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "london stock exchange group": {"ticker": "LSEG", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    # --- Europe: energy / utilities / infrastructure ---
+    "iberdrola": {"ticker": "IBE", "exchange": "BME Madrid", "country": "ES", "cap": "mega"},
+    "enel": {"ticker": "ENEL", "exchange": "Borsa Italiana", "country": "IT", "cap": "large"},
+    "engie": {"ticker": "ENGI", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "veolia": {"ticker": "VIE", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "siemens energy": {"ticker": "ENR", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "schneider electric": {"ticker": "SU", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    "abb": {"ticker": "ABBN", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "large"},
+    "kone oyj": {"ticker": "KNEBV", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
+    "kone": {"ticker": "KNEBV", "exchange": "Nasdaq Helsinki", "country": "FI", "cap": "large"},
+    "sdiptech": {"ticker": "SDIP B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "mid"},
+    "tk elevator": {"ticker": "N/A private", "exchange": "N/A", "country": "DE", "cap": "private"},
+    # --- Europe: defense / aerospace ---
+    "hensoldt": {"ticker": "HAG", "exchange": "Xetra", "country": "DE", "cap": "mid"},
+    "dassault aviation": {"ticker": "AM", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "rolls-royce": {"ticker": "RR.", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "mtu aero": {"ticker": "MTX", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    # --- Europe: retail / consumer / luxury ---
+    "tesco": {"ticker": "TSCO", "exchange": "London Stock Exchange", "country": "GB", "cap": "large"},
+    "carrefour": {"ticker": "CA", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "inditex": {"ticker": "ITX", "exchange": "BME Madrid", "country": "ES", "cap": "mega"},
+    "hennes mauritz": {"ticker": "HM B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "h&m": {"ticker": "HM B", "exchange": "Nasdaq Stockholm", "country": "SE", "cap": "large"},
+    "hermès": {"ticker": "RMS", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    "hermes": {"ticker": "RMS", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    "kering": {"ticker": "KER", "exchange": "Euronext Paris", "country": "FR", "cap": "large"},
+    "richemont": {"ticker": "CFR", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "large"},
+    "adidas": {"ticker": "ADS", "exchange": "Xetra", "country": "DE", "cap": "large"},
+    "puma": {"ticker": "PUM", "exchange": "Xetra", "country": "DE", "cap": "mid"},
+    "l'oréal": {"ticker": "OR", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    "loreal": {"ticker": "OR", "exchange": "Euronext Paris", "country": "FR", "cap": "mega"},
+    "aldi sud": {"ticker": "N/A private", "exchange": "N/A", "country": "DE", "cap": "private"},
+    "aldi süd": {"ticker": "N/A private", "exchange": "N/A", "country": "DE", "cap": "private"},
+    "schwarz gruppe": {"ticker": "N/A private", "exchange": "N/A", "country": "DE", "cap": "private"},
+    "rewe group": {"ticker": "N/A private", "exchange": "N/A", "country": "DE", "cap": "private"},
+    # --- Global: shipping ---
+    "cosco shipping": {"ticker": "1919", "exchange": "HKEX", "country": "CN", "cap": "large"},
+    "evergreen marine": {"ticker": "2603", "exchange": "Taiwan Stock Exchange", "country": "TW", "cap": "large"},
+    "zim integrated shipping": {"ticker": "ZIM", "exchange": "NYSE", "country": "IL", "cap": "mid"},
+    "frontline": {"ticker": "FRO", "exchange": "NYSE", "country": "CY", "cap": "mid"},
+    "hafnia": {"ticker": "HAFNI", "exchange": "Oslo Børs", "country": "SG", "cap": "mid"},
+    "torm": {"ticker": "TRMD A", "exchange": "Nasdaq Copenhagen", "country": "GB", "cap": "mid"},
+    # --- Global: AI / software ---
+    "oracle": {"ticker": "ORCL", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "salesforce": {"ticker": "CRM", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "snowflake": {"ticker": "SNOW", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "servicenow": {"ticker": "NOW", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "synopsys": {"ticker": "SNPS", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "cadence design": {"ticker": "CDNS", "exchange": "Nasdaq", "country": "US", "cap": "large"},
+    "adobe": {"ticker": "ADBE", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "sap": {"ticker": "SAP", "exchange": "Xetra", "country": "DE", "cap": "mega"},
+    "shopify": {"ticker": "SHOP", "exchange": "NYSE", "country": "CA", "cap": "large"},
+    # --- Global: payments / finance ---
+    "visa": {"ticker": "V", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "mastercard": {"ticker": "MA", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "blackrock": {"ticker": "BLK", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "blackstone": {"ticker": "BX", "exchange": "NYSE", "country": "US", "cap": "large"},
+    "brookfield": {"ticker": "BN", "exchange": "NYSE", "country": "CA", "cap": "large"},
+    "alimentation couche-tard": {"ticker": "ATD", "exchange": "Toronto Stock Exchange", "country": "CA", "cap": "large"},
+    # --- Global: consumer / defensive ---
+    "nestle": {"ticker": "NESN", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "mega"},
+    "nestlé": {"ticker": "NESN", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "mega"},
+    "unilever": {"ticker": "ULVR", "exchange": "London Stock Exchange", "country": "GB", "cap": "mega"},
+    "procter gamble": {"ticker": "PG", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "pepsico": {"ticker": "PEP", "exchange": "Nasdaq", "country": "US", "cap": "mega"},
+    "mcdonalds": {"ticker": "MCD", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    # --- Global: pharma / healthcare ---
+    "novo nordisk": {"ticker": "NOVO B", "exchange": "Nasdaq Copenhagen", "country": "DK", "cap": "mega"},
+    "novartis": {"ticker": "NOVN", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "mega"},
+    "roche": {"ticker": "ROG", "exchange": "SIX Swiss Exchange", "country": "CH", "cap": "mega"},
+    "astrazeneca": {"ticker": "AZN", "exchange": "London Stock Exchange", "country": "GB", "cap": "mega"},
+    "eli lilly": {"ticker": "LLY", "exchange": "NYSE", "country": "US", "cap": "mega"},
+    "johnson johnson": {"ticker": "JNJ", "exchange": "NYSE", "country": "US", "cap": "mega"},
 }
 _BALTIC_COUNTRIES = {"LT", "LV", "EE"}
 
@@ -811,19 +925,35 @@ def _validate_numbers_against_evidence(item: dict) -> None:
                 item[field] = text
 
 
+# Common legal / corporate suffixes stripped before matching so that
+# “Visa Inc”, “SAP SE”, “Neste Oyj” all resolve to their base key.
+_CORP_SUFFIX_RE = re.compile(
+    r"\s+(?:inc|corp|corporation|ltd|limited|plc|ag|se|ab|oy|oyj|asa|bv|nv"
+    r"|sa|sas|srl|spa|llc|lp|gmbh|co|holding|holdings|international"
+    r"|technologies?|solutions|services|enterprises?|ventures?)\.?$",
+    re.IGNORECASE,
+)
+
+
 def _normalize_company_name(name: str) -> str:
-    """Lowercase + strip Lithuanian quotes/punctuation/extra whitespace."""
+    """Lowercase, strip LT quotes/punctuation, remove trailing corporate suffixes."""
     if not name:
         return ""
     name = name.lower()
     for old, new in [
-        ("„", ""), ("“", ""), ("”", ""), ('"', ""),
-        ("‘", ""), ("’", ""), ("'", ""),
-        ("–", "-"), ("—", "-"), ("…", ""),
+        ("\u201e", ""), ("\u201c", ""), ("\u201d", ""), ('"', ""),
+        ("\u2018", ""), ("\u2019", ""), ("\u02bc", ""),
+        ("\u2013", "-"), ("\u2014", "-"), ("\u2026", ""),
     ]:
         name = name.replace(old, new)
-    return re.sub(r"\s+", " ", name).strip()
-
+    name = re.sub(r"\s+", " ", name).strip()
+    # Strip trailing corporate suffix (iteratively, e.g. "Visa Inc Corp" -> "Visa")
+    while True:
+        stripped = _CORP_SUFFIX_RE.sub("", name).strip()
+        if stripped == name:
+            break
+        name = stripped
+    return name
 
 def _remove_accents(text: str) -> str:
     """Strip combining diacritics (ą→a, š→s, ž→z, etc.)."""
@@ -833,13 +963,26 @@ def _remove_accents(text: str) -> str:
     )
 
 
+# Geographic / subsidiary qualifiers that indicate a local branch, not the listed parent.
+# If the query contains one of these AND the candidate key does not, the substring match
+# is skipped to prevent "Orlen Lietuva" matching "orlen" (PKN) or
+# "Circle K Lietuva" matching an unrelated key.
+_SUBSIDIARY_QUALIFIERS = {
+    "lietuva", "latvija", "eesti", "estonia", "latvia", "lithuania",
+    "polska", "polska", "suomi", "finland", "sverige", "sweden",
+    "deutschland", "germany", "france", "espana", "italia",
+}
+
+
 def _lookup_ticker(name: str) -> dict | None:
     """
     Three-pass lookup against TICKER_MAP:
     1. Normalized exact match (lowercase, no LT quotes/punctuation)
     2. Accent-insensitive exact match (ą→a, š→s, ž→z, etc.)
-    3. Substring match — only for keys ≥5 chars (prevents "ing" matching "banking")
-       Both normalized and accent-stripped forms are tried.
+    3. Substring match — keys ≥5 chars only.
+       If the query contains a geographic/subsidiary qualifier (e.g. "lietuva")
+       but the candidate key does not, the match is skipped so that
+       "Orlen Lietuva" never resolves to the PKN (parent) ticker.
     """
     if not name:
         return None
@@ -858,10 +1001,20 @@ def _lookup_ticker(name: str) -> dict | None:
         if _remove_accents(key) == query_na:
             return value
 
+    # Determine if query contains a subsidiary qualifier
+    query_words = set(query.split())
+    query_qualifiers = query_words & _SUBSIDIARY_QUALIFIERS
+
     # Pass 3: substring match (keys ≥5 chars only)
     for key, value in norm_map.items():
         if len(key) < 5:
             continue
+        # Subsidiary guard: skip if the query is qualified but the key is not,
+        # e.g. don't let "orlen lietuva" match "orlen"
+        if query_qualifiers:
+            key_words = set(key.split())
+            if not (key_words & _SUBSIDIARY_QUALIFIERS):
+                continue
         key_na = _remove_accents(key)
         if key in query or query in key:
             return value
