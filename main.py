@@ -951,20 +951,21 @@ ARTICLES:
 """
 
 
-def gemini_extract(articles: list[dict]) -> dict:
+def _gemini_extract_batch(articles: list[dict]) -> list:
+    """Extract one batch of articles; returns the items list."""
     block = ""
     for a in articles:
-        body = a["body"][:3500]
+        body = a["body"][:3000]
         block += f"\n\n=== URL: {a['url']} ===\n=== TITLE: {a['title']} ===\n{body}"
     raw = gemini_call(
         EXTRACTION_PROMPT + block,
-        max_tokens=32768,
+        max_tokens=16384,
         temperature=0.3,
         json_mode=True,
     )
     text = strip_fences(raw)
     try:
-        return json.loads(text)
+        obj = json.loads(text)
     except json.JSONDecodeError:
         # Gemini sometimes emits two concatenated JSON objects; raw_decode stops
         # at the first valid document boundary and ignores trailing content.
@@ -972,10 +973,23 @@ def gemini_extract(articles: list[dict]) -> dict:
         if i >= 0:
             try:
                 obj, _ = json.JSONDecoder().raw_decode(text, i)
-                return obj
             except json.JSONDecodeError:
-                pass
-        raise
+                raise
+        else:
+            raise
+    return obj.get("items", []) if isinstance(obj, dict) else []
+
+
+def gemini_extract(articles: list[dict]) -> dict:
+    """Batch extraction — splits into chunks of 12 to stay within output token limits."""
+    BATCH = 12
+    all_items: list = []
+    for start in range(0, len(articles), BATCH):
+        chunk = articles[start:start + BATCH]
+        print(f"  gemini_extract batch {start // BATCH + 1}: {len(chunk)} articles")
+        items = _gemini_extract_batch(chunk)
+        all_items.extend(items)
+    return {"items": all_items}
 
 
 def normalize_text(s: str) -> str:
