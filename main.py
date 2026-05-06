@@ -1656,7 +1656,7 @@ def _badge(text: str, color: str) -> str:
 
 
 def _render_card(item: dict) -> str:
-    """Full card for Top Signals (B). Structured: header / evidence / market read / impact / tickers."""
+    """Full card for Top Signals (B). Structured: header / evidence / badges / market read / entity rows / tickers."""
     a_type = _esc((item.get("article_type") or "other").replace("_", " ").upper())
     importance = _esc((item.get("importance") or "—").upper())
     confidence = _esc(item.get("confidence") or "—")
@@ -1675,6 +1675,7 @@ def _render_card(item: dict) -> str:
     )
 
     fund = (item.get("signal_fundamental") or "unclear").lower()
+    react = (item.get("signal_market_reaction") or "unknown").lower()
     trade = (item.get("tradability") or "watch-only").lower()
 
     public_direct = [p for p in (item.get("public_tickers") or []) if (p.get("role") or "direct").lower() == "direct"]
@@ -1700,34 +1701,49 @@ def _render_card(item: dict) -> str:
 
     tickers_html = "".join(_ticker_chip(p) for p in public_direct) or "—"
 
-    def _impact_row(label: str, items_: list, color: str = "#cdd0d4") -> str:
+    # Signal badges row
+    badges_html = (
+        _badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
+        + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#8c959f"))
+        + _badge(f"Tradability: {trade}", _TRADE_COLORS.get(trade, "#57606a"))
+    )
+
+    # Compact labeled entity rows — no background box, border-left accent
+    def _entity_row(label: str, items_: list, color: str = "#cdd0d4") -> str:
         if not items_:
             return ""
         content = ", ".join(_esc(str(x)) for x in items_[:6])
         return (
-            f'<div style="margin:3px 0;font-size:12px">'
-            f'<span style="color:#8c959f;min-width:170px;display:inline-block">{label}:</span>'
+            f'<div style="margin:4px 0;font-size:12px;line-height:1.5">'
+            f'<span style="color:#57606a;min-width:160px;display:inline-block">{label}:</span>'
             f'<span style="color:{color}">{content}</span></div>'
         )
 
-    impact_html = (
-        _impact_row("Direction", [fund], _FUND_COLORS.get(fund, "#57606a"))
-        + _impact_row("Tradability", [trade], _TRADE_COLORS.get(trade, "#57606a"))
-        + _impact_row("Direct companies", [p["name"] for p in public_direct if p.get("name")])
-        + _impact_row("Related public", [p["name"] for p in public_related if p.get("name")])
-        + _impact_row("Private companies", [p.get("name", "?") for p in priv])
-        + _impact_row("Sectors / themes", sectors)
-        + _impact_row("Instruments / indexes", instr_names)
+    entity_html = (
+        _entity_row("Direct companies", [p["name"] for p in public_direct if p.get("name")])
+        + _entity_row("Related public", [p["name"] for p in public_related if p.get("name")])
+        + _entity_row("Private companies", [p.get("name", "?") for p in priv])
+        + _entity_row("Sectors / themes", sectors, "#8c959f")
+        + _entity_row("Instruments / indexes", instr_names, "#8c959f")
     )
+
+    # Market Read is always rendered; italic fallback when empty
+    if market_read:
+        mr_content = f'<span style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</span>'
+    else:
+        mr_content = '<span style="font-size:13px;color:#57606a;font-style:italic">No market read available.</span>'
 
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
         f'margin:0 0 18px;font-family:{_F};max-width:680px">'
+        # metadata row
         f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
         f'letter-spacing:.5px;margin-bottom:6px">'
         f'{a_type} · {importance} · conf:{confidence} · score:{score}{liveblog_tag}</div>'
+        # headline
         f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:12px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
+        # evidence block
         + (
             f'<div style="margin-bottom:12px">'
             f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
@@ -1735,24 +1751,25 @@ def _render_card(item: dict) -> str:
             f'<div style="padding:8px 12px;border-left:3px solid #444c56">{ev_html}</div></div>'
             if ev_html else ""
         )
+        # signal badges
+        + f'<div style="margin-bottom:12px">{badges_html}</div>'
+        # market read — always present
         + (
             f'<div style="margin-bottom:12px">'
             f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
             f'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
-            f'<div style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</div></div>'
-            if market_read else ""
+            f'<div style="padding-left:12px;border-left:3px solid #30363d">{mr_content}</div></div>'
         )
+        # entity rows (no background)
         + (
-            f'<div style="margin-bottom:10px;padding:10px 12px;background:#161b22;'
-            f'border-radius:6px">'
-            f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-            f'letter-spacing:.4px;margin-bottom:6px">Impact</div>'
-            + impact_html
+            f'<div style="margin-bottom:10px;padding-left:12px;border-left:3px solid #30363d">'
+            + entity_html
             + "</div>"
-            if impact_html else ""
+            if entity_html else ""
         )
+        # tickers
         + (
-            f'<div style="font-size:12px">'
+            f'<div style="font-size:12px;padding-top:8px;border-top:1px solid #30363d">'
             f'<span style="color:#8c959f;text-transform:uppercase;font-size:11px;'
             f'letter-spacing:.4px">Tickers: </span>{tickers_html}'
             + (f' &nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>' if proxies else "")
