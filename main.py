@@ -366,7 +366,7 @@ STEP 3 — DEDUP. If two URLs cover the same story (same company + same event):
   They go in a separate section; do NOT treat them as main cards.
 
 ═══════════════════════════════════════════
-STEP 4 — IMPORTANCE (be strict; max 5 HIGH per run):
+STEP 4 — IMPORTANCE (target 4–6 HIGH per run):
 HIGH:
   • Public company earnings/guidance/M&A with direct price impact
   • Oil/rates/inflation shock with clear transmission mechanism
@@ -384,22 +384,17 @@ LOW → skip or Watchlist:
   • Private local business story without scale
 
 ═══════════════════════════════════════════
-STEP 5 — EVIDENCE SNIPPETS (2–7 per card):
+STEP 5 — EVIDENCE SNIPPETS:
+• importance=high: provide 4–8 snippets. importance=medium: provide 2–4 snippets.
 • Each snippet: verbatim Lithuanian substring of THAT article's body. MAX 12 WORDS.
-• Prefer snippets with numbers.
+• Prefer snippets with numbers; cover different facts (not variations of the same sentence).
 • No paraphrasing, no translation, no full paragraphs.
 • If you cannot find ≥2 snippets, output item as low_relevance with skip_reason: "insufficient evidence".
 GOOD: "apie 200 mln. Eur Kairių"
 BAD:  "2026–2027 metais didieji projektai turės daug įtakos viso sektoriaus rodikliams..."
 
 ═══════════════════════════════════════════
-STEP 6 — KEY NUMBERS (max 5 per card):
-• Only numbers that change investment interpretation.
-• Every number MUST appear verbatim in THIS article's body only.
-• Never carry numbers from another article. Never invent numbers.
-
-═══════════════════════════════════════════
-STEP 7 — TICKERS:
+STEP 6 — TICKERS:
 • List in candidate_companies ONLY companies DIRECTLY NAMED in the article whose event directly affects them.
 • Do NOT add sector-proxy companies to candidate_companies.
 • If a company is clearly public (e.g. Micron, ConocoPhillips, Pinterest, eBay, GameStop) name it — Python maps to ticker.
@@ -407,7 +402,7 @@ STEP 7 — TICKERS:
 • Never invent ticker symbols. Python validates all names.
 
 ═══════════════════════════════════════════
-STEP 8 — SIGNALS:
+STEP 7 — SIGNALS:
 • signal_fundamental: your analysis of the event's investment quality.
   Values: bullish | bearish | mixed | neutral | unclear
 • signal_market_reaction: ONLY if article text explicitly states how a stock/index/asset moved.
@@ -415,7 +410,7 @@ STEP 8 — SIGNALS:
   DEFAULT = "unknown". Do NOT guess market reaction.
 
 ═══════════════════════════════════════════
-STEP 9 — EXECUTIVE BRIEF BULLET (brief_bullet field):
+STEP 8 — EXECUTIVE BRIEF BULLET (brief_bullet field):
 Write ONE complete English sentence:
 • ≤22 words. NO ellipsis. NO trailing "…". Complete sentence, full stop.
 • Must contain a concrete number OR a clear market implication.
@@ -424,18 +419,25 @@ GOOD: "Norway resumes gas field production, adding ~2 bcm/year to Europe's suppl
 BAD:  "Norway resumes exploitation of several fields, boosting gas supply to Europe..."
 
 ═══════════════════════════════════════════
-STEP 10 — CONFIDENCE:
+STEP 9 — CONFIDENCE:
 high   = hard data from the article (earnings, official figures, signed agreements)
 medium = analysis, estimates, unnamed sources, preliminary/proposed changes
 low    = speculation, opinion, historical analogy, vague statements
 Not everything is HIGH. Opinion pieces, historical comparisons, and speculative
 macro commentary must be CONF:LOW or CONF:MEDIUM.
 
-═══════════════════════════════════════════════
-STEP 11 — TRADABILITY:
+═══════════════════════════════════════════
+STEP 10 — TRADABILITY:
 direct     = listed company directly affected; can be traded now
 indirect   = sector/macro effect; tradable via ETF or proxy
 watch-only = private, state-owned, or no clear near-term tradable instrument
+
+═══════════════════════════════════════════
+STEP 11 — MARKET READ (market_read field):
+Write 2–3 English sentences explaining why this event matters for investors.
+• Cover both the short-term signal and relevant long-term context.
+• No BUY/SELL/HOLD. No filler phrases ("This is significant because…").
+• Be specific: name the mechanism, the affected asset class, the magnitude.
 
 ═══════════════════════════════════════════
 HARD RULES (any violation = drop the item in Python):
@@ -443,8 +445,6 @@ HARD RULES (any violation = drop the item in Python):
 • Every evidence_lt snippet must be a verbatim substring of THAT article's body. ≤12 words.
 • Never output BUY / SELL / HOLD or analyst price targets or ratings.
 • Never invent tickers — list company names in candidate_companies exactly as written.
-• Numbers in key_numbers come from this article only.
-• Hedge in what_happened_en if a policy is proposed/draft/non-final.
 • Two articles covering the same event → only one gets a full card.
 
 ═══════════════════════════════════════════
@@ -458,8 +458,7 @@ JSON SCHEMA (one object per article):
   "headline_en": "<≤12 words>",
   "brief_bullet": "<≤22 words, complete sentence, no ellipsis, must have a number or market implication>",
   "evidence_lt": ["<verbatim LT, ≤12 words, prefer with numbers>", ...],
-  "what_happened_en": "<1–2 factual sentences; hedge if proposed/not final>",
-  "key_numbers": ["<number + brief context, max 5>", ...],
+  "market_read": "<2–3 English sentences on investor relevance; no BUY/SELL/HOLD; no filler>",
   "candidate_companies": ["<name exactly as written in article>", ...],
   "ticker_proxies": ["<company not in article but possibly affected — optional>"],
   "affected_direct": ["<directly mentioned companies/sectors/countries>"],
@@ -467,8 +466,6 @@ JSON SCHEMA (one object per article):
   "signal_fundamental": "bullish|bearish|mixed|neutral|unclear",
   "signal_market_reaction": "positive|negative|neutral|unknown",
   "tradability": "direct|indirect|watch-only",
-  "investor_meaning_en": "<2–3 sentences covering short-term signal and long-term context. No filler. No BUY/SELL/HOLD.>",
-  "monitor": ["<specific concrete thing to watch next>", ...],
   "skip_reason": "<only for low_relevance/sponsored/duplicate items, else omit>"
 }
 
@@ -505,9 +502,10 @@ def normalize_text(s: str) -> str:
 
 _DROP_TYPES = {"low_relevance", "sponsored_or_ad"}
 _IMPORTANCE_RANK = {"high": 0, "medium": 1, "low": 2}
-_MAX_HIGH = 5       # max cards allowed at HIGH importance
-_MAX_MAIN = 8       # max non-liveblog cards total (Top Signals + Watchlist)
-_MAX_TOP = 5        # max cards in Top Signals (B); rest go to Watchlist (D)
+_MAX_HIGH = 6       # max cards allowed at HIGH importance (target 4-6)
+_MAX_MAIN = 14      # max non-liveblog cards total (up to 6 Top Signals + 8 Watchlist)
+_MAX_TOP = 6        # max cards in Top Signals (B); rest go to Watchlist (D)
+_MAX_WATCHLIST = 8  # max cards in Watchlist (D)
 
 # These article types should never be HIGH importance and cap confidence at medium.
 _OPINION_TYPES = {"educational", "personal_finance", "market_overview"}
@@ -526,12 +524,6 @@ def _lookup_ticker(name: str) -> dict | None:
             return info
     return None
 
-
-def _has_number_in_body(num_str: str, body_norm: str) -> bool:
-    """Check that any digit-containing token from the key_number appears in the article body."""
-    import re
-    tokens = re.findall(r"[\d][^\s]*", normalize_text(num_str))
-    return any(t in body_norm for t in tokens) if tokens else True
 
 
 def _theme_key(item: dict) -> str:
@@ -585,14 +577,7 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         if len(valid_snips) < 2 and not item.get("is_liveblog"):
             _skip(item, "fewer than 2 evidence snippets verified in body")
             continue
-        item["evidence_lt"] = valid_snips[:5]  # prefer 3–5, cap at 5
-
-        # Key-number cross-article contamination check
-        clean_nums = [
-            n for n in (item.get("key_numbers") or [])
-            if _has_number_in_body(n, body_norm)
-        ]
-        item["key_numbers"] = clean_nums[:5]
+        item["evidence_lt"] = valid_snips[:8]  # up to 8 for top signals; render trims to 4 for watchlist
 
         # Ticker resolution
         public, companies_private, tickers_unclear = [], [], []
@@ -716,15 +701,14 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
             watchlist.append(item)
         top_signals = top_signals[:_MAX_TOP]
 
-    # Cap total main to _MAX_MAIN
-    all_main = top_signals + watchlist
-    for item in all_main[_MAX_MAIN:]:
-        _skip(item, "card cap: beyond max 8 signals")
-    all_main = all_main[:_MAX_MAIN]
+    # Cap watchlist at _MAX_WATCHLIST
+    for item in watchlist[_MAX_WATCHLIST:]:
+        _skip(item, "card cap: beyond max watchlist")
+    watchlist = watchlist[:_MAX_WATCHLIST]
 
     return {
         "top_signals": top_signals,
-        "watchlist": watchlist[:_MAX_MAIN - len(top_signals)],
+        "watchlist": watchlist,
         "liveblogs": liveblogs,
         "skipped": skipped,
     }
@@ -775,7 +759,7 @@ def _render_card(item: dict) -> str:
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
 
-    snips = (item.get("evidence_lt") or [])[:5]
+    snips = (item.get("evidence_lt") or [])[:8]
     ev_items = "".join(
         f'<div style="margin:3px 0">• "{_esc(s)}"</div>' for s in snips
     )
@@ -795,21 +779,20 @@ def _render_card(item: dict) -> str:
     react = (item.get("signal_market_reaction") or "unknown").lower()
     trade = (item.get("tradability") or "watch-only").lower()
 
-    key_numbers = item.get("key_numbers") or []
-    monitor = item.get("monitor") or []
-
-    kn_html = ""
-    if key_numbers:
-        kn_html = ('<div style="margin:0 0 9px;font-size:13px;line-height:1.5">'
-                   '<strong>🔢 Key numbers:</strong><ul style="margin:4px 0 0;padding-left:18px">'
-                   + "".join(f'<li style="margin:2px 0">{_esc(n)}</li>' for n in key_numbers)
-                   + '</ul></div>')
+    affected_parts = []
+    direct = item.get("affected_direct")
+    indirect = item.get("affected_indirect")
+    if direct:
+        affected_parts.append(f'<strong>Direct:</strong> {_join(direct)}')
+    if indirect:
+        affected_parts.append(f'<strong>Indirect:</strong> {_join(indirect)}')
+    affected_html = (' &nbsp;|&nbsp; '.join(affected_parts)) if affected_parts else "—"
 
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
         f'margin:0 0 16px;font-family:{_F};max-width:680px">'
 
-        # header
+        # header: type · importance · conf + headline + evidence
         f'<div style="border-bottom:1px dashed #444c56;padding-bottom:12px;margin-bottom:14px">'
         f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
         f'letter-spacing:.5px;margin-bottom:6px">📰 {a_type} · {importance} · conf:{confidence}{liveblog}</div>'
@@ -821,36 +804,39 @@ def _render_card(item: dict) -> str:
         + '</div>'
 
         # body
-        + _row("🧭", "What happened", _esc(item.get("what_happened_en") or ""))
-        + kn_html
-        + _row("🎯", "Direct", _join(item.get("affected_direct")))
-        + _row("🔗", "Indirect", _join(item.get("affected_indirect")))
-        + _row("📊", "Tickers verified", tickers_verified)
-        + (_row("🏢", "Private companies", _join(priv)) if priv else "")
-        + (_row("❓", "Ticker unclear", _join(unclear)) if unclear else "")
-        + (_row("🔭", "Possible proxies", _join(proxies)) if proxies else "")
+        + _row("🌐", "Market read", _esc(item.get("market_read") or ""))
         + f'<div style="margin:0 0 9px;font-size:13px;line-height:1.8">'
           f'<strong>📈 Signal:</strong> '
           + _badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a"))
           + _badge(f"Market: {react}", _REACT_COLORS.get(react, "#8c959f"))
           + _badge(f"Tradability: {trade}", _TRADE_COLORS.get(trade, "#57606a"))
           + '</div>'
-        + _row("💡", "Investor meaning", _esc(item.get("investor_meaning_en") or ""))
-        + (_row("👁", "Monitor", _join(monitor)) if monitor else "")
+        + _row("🎯", "Affected", affected_html)
+        + _row("📊", "Tickers", tickers_verified)
+        + (_row("🏢", "Private", _join(priv)) if priv else "")
+        + (_row("❓", "Ticker unclear", _join(unclear)) if unclear else "")
+        + (_row("🔭", "Proxies", _join(proxies)) if proxies else "")
         + '</div>'
     )
 
 
 def _render_watchlist_row(item: dict) -> str:
-    """Compact single-row card for section D (Watchlist)."""
+    """Compact card for section D (Watchlist): brief bullet + 2-4 evidence snippets."""
     importance = (item.get("importance") or "medium").upper()
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
     a_type = _esc((item.get("article_type") or "").replace("_", " "))
-    what = _esc(item.get("what_happened_en") or "")
+    brief = _esc(item.get("brief_bullet") or "")
     fund = (item.get("signal_fundamental") or "neutral").lower()
     trade = (item.get("tradability") or "watch-only").lower()
     color = _FUND_COLORS.get(fund, "#57606a")
+
+    snips = (item.get("evidence_lt") or [])[:4]
+    ev_items = "".join(
+        f'<div style="margin:2px 0;font-size:12px;color:#8c959f;font-style:italic">• "{_esc(s)}"</div>'
+        for s in snips
+    )
+
     return (
         f'<div style="border-left:3px solid #444c56;padding:8px 12px;'
         f'margin:0 0 10px;font-family:{_F}">'
@@ -858,8 +844,10 @@ def _render_watchlist_row(item: dict) -> str:
         f'{importance} · {_esc(a_type)}</div>'
         f'<div style="font-size:14px;font-weight:600;margin-bottom:4px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
-        f'<div style="font-size:13px;color:#cdd0d4">{what}</div>'
-        f'<div style="margin-top:5px">'
+        + (f'<div style="font-size:13px;color:#cdd0d4;margin-bottom:5px">{brief}</div>' if brief else '')
+        + (f'<div style="padding:4px 8px;border-left:2px solid #30363d;margin-bottom:5px">{ev_items}</div>'
+           if ev_items else '')
+        + f'<div style="margin-top:4px">'
         + _badge(fund, color)
         + _badge(trade, _TRADE_COLORS.get(trade, "#57606a"))
         + '</div></div>'
@@ -869,12 +857,12 @@ def _render_watchlist_row(item: dict) -> str:
 def _render_liveblog_row(item: dict) -> str:
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
-    what = _esc(item.get("what_happened_en") or "")
+    brief = _esc(item.get("brief_bullet") or "")
     return (
         f'<div style="padding:6px 0;border-bottom:1px solid #30363d;font-family:{_F}">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none;font-size:13px;'
         f'font-weight:600">{headline}</a>'
-        + (f' <span style="font-size:12px;color:#8c959f">— {what}</span>' if what else '')
+        + (f' <span style="font-size:12px;color:#8c959f">— {brief}</span>' if brief else '')
         + '</div>'
     )
 
@@ -890,7 +878,7 @@ def _render_tickers_table(items: list[dict]) -> str:
         fund = (item.get("signal_fundamental") or "unclear").lower()
         react = (item.get("signal_market_reaction") or "unknown").lower()
         url = _esc(item.get("url") or "")
-        what = _esc((item.get("what_happened_en") or "")[:120])
+        what = _esc((item.get("brief_bullet") or item.get("headline_en") or "")[:120])
         for p in (item.get("public_tickers") or []):
             t = p.get("ticker", "")
             if not t or t in seen:
@@ -951,11 +939,11 @@ def render_html(result: dict, today: dt.date) -> str:
 
     # ── A · Executive Brief ───────────────────────────────────────────
     bullets = []
-    for item in top_signals[:5]:
+    for item in top_signals[:6]:
         b = (item.get("brief_bullet") or "").strip()
         if not b:
-            # Fallback: use what_happened_en, truncated cleanly at word boundary
-            fallback = (item.get("what_happened_en") or item.get("headline_en") or "").strip()
+            # Fallback: use market_read, truncated cleanly at word boundary
+            fallback = (item.get("market_read") or item.get("headline_en") or "").strip()
             words = fallback.split()[:22]
             b = " ".join(words)
             if not b.endswith("."):
@@ -991,10 +979,10 @@ def render_html(result: dict, today: dt.date) -> str:
         parts.append(f'<h2 style="{h2s}">D · Macro / Sector / Private Watchlist</h2>')
         parts.extend(_render_watchlist_row(i) for i in watchlist)
 
-    # ── E · Liveblog / Dienos pulsas ─────────────────────────────────
+    # ── E · Dienos Pulsas / Live Market Updates ──────────────────────
     market_lb = [i for i in liveblogs if (i.get("importance") or "low").lower() != "low"]
     if market_lb:
-        parts.append(f'<h2 style="{h2s}">E · Liveblog / Dienos pulsas</h2>')
+        parts.append(f'<h2 style="{h2s}">E · Dienos Pulsas / Live Market Updates</h2>')
         parts.append(f'<div style="font-family:{_F}">')
         parts.extend(_render_liveblog_row(i) for i in market_lb)
         parts.append('</div>')
