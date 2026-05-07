@@ -616,14 +616,27 @@ def url_section(url: str) -> str:
     return path.split("/")[0] if path else ""
 
 
-def fetch_rss(since: dt.datetime) -> list[dict]:
+def fetch_rss(since: dt.datetime) -> tuple[list[dict], dict]:
+    """Returns (items_since, diagnostics)."""
     feed = feedparser.parse(RSS_URL)
+    diag: dict = {
+        "total_entries": len(feed.entries),
+        "bozo": bool(feed.get("bozo")),
+        "bozo_exception": str(feed.get("bozo_exception", "")),
+        "no_date": 0,
+        "too_old": 0,
+        "newest_pub": None,
+    }
     items = []
     for entry in feed.entries:
         if not getattr(entry, "published_parsed", None):
+            diag["no_date"] += 1
             continue
         pub = dt.datetime(*entry.published_parsed[:6], tzinfo=dt.timezone.utc)
+        if diag["newest_pub"] is None or pub > diag["newest_pub"]:
+            diag["newest_pub"] = pub
         if pub <= since:
+            diag["too_old"] += 1
             continue
         items.append({
             "title": entry.title,
@@ -634,7 +647,7 @@ def fetch_rss(since: dt.datetime) -> list[dict]:
             "section": url_section(entry.link),
         })
     items.sort(key=lambda x: x["published"], reverse=True)
-    return items
+    return items, diag
 
 
 def tier_filter(items: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -2374,14 +2387,20 @@ def run() -> None:
     print(f"Last run: {last_run.isoformat()}")
     print(f"This run: {now.isoformat()}")
 
-    rss_items = fetch_rss(since=last_run)
-    print(f"RSS items since last run: {len(rss_items)}")
+    rss_items, rss_diag = fetch_rss(since=last_run)
+    print(f"RSS feed: {rss_diag['total_entries']} entries total | "
+          f"bozo={rss_diag['bozo']} | no_date={rss_diag['no_date']} | "
+          f"too_old={rss_diag['too_old']} | since_window={len(rss_items)}")
+    if rss_diag["bozo"]:
+        print(f"  RSS bozo_exception: {rss_diag['bozo_exception']}")
 
     # Cap RSS pool so we don't blow up on long backfills
     rss_items = rss_items[:MAX_ARTICLES_RSS]
 
     high, conditional, _skip = tier_filter(rss_items)
-    print(f"High-tier: {len(high)} | Conditional: {len(conditional)}")
+    sections_seen = {it["section"] for it in rss_items}
+    print(f"High-tier: {len(high)} | Conditional: {len(conditional)} | "
+          f"Sections seen: {sorted(sections_seen)}")
 
     # Pre-score every candidate by section + LT/EN keywords, then take top N for fetch.
     candidates = high + conditional
@@ -2392,10 +2411,25 @@ def run() -> None:
     top_pre = [c.get("_prescore", 0) for c in candidates[:5]]
     print(f"Pre-scored: selected {len(candidates)} for fetch (top scores={top_pre})")
 
+    def _diag_html() -> str:
+        newest = rss_diag["newest_pub"].isoformat() if rss_diag["newest_pub"] else "none"
+        return (
+            f"<pre style='font-size:12px;background:#f6f8fa;padding:10px;border-radius:4px'>"
+            f"Window : {last_run.isoformat()} → {now.isoformat()}\n"
+            f"RSS     : {rss_diag['total_entries']} entries | bozo={rss_diag['bozo']}"
+            + (f" ({rss_diag['bozo_exception']})" if rss_diag["bozo"] else "") + "\n"
+            f"Newest  : {newest}\n"
+            f"No date : {rss_diag['no_date']} | Too old: {rss_diag['too_old']} | In window: {len(rss_items)}\n"
+            f"Sections: {sorted(sections_seen)}\n"
+            f"High    : {len(high)} | Conditional: {len(conditional)}\n"
+            f"</pre>"
+        )
+
     if not candidates:
         send_email(
             f"VŽ summary {now.date().isoformat()} — no new articles",
-            "<p>No new investing-relevant VŽ articles since last run.</p>" + DISCLAIMER_HTML,
+            f"<p>No investing-relevant VŽ articles found in the fetch window.</p>"
+            + _diag_html() + DISCLAIMER_HTML,
         )
         save_last_run(now)
         return
@@ -2406,8 +2440,9 @@ def run() -> None:
     if not fetched:
         send_email(
             f"VŽ summary {now.date().isoformat()} — fetch issues",
-            "<p>No article bodies could be fetched. Login may have failed or "
-            "all candidates were paywalled in the extracted text.</p>" + DISCLAIMER_HTML,
+            f"<p>No article bodies could be fetched. Login may have failed or "
+            f"all candidates were paywalled.</p>"
+            + _diag_html() + DISCLAIMER_HTML,
         )
         save_last_run(now)
         return
