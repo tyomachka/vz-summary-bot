@@ -955,11 +955,11 @@ def _gemini_extract_batch(articles: list[dict]) -> list:
     """Extract one batch of articles; returns the items list."""
     block = ""
     for a in articles:
-        body = a["body"][:3000]
+        body = a["body"][:2500]
         block += f"\n\n=== URL: {a['url']} ===\n=== TITLE: {a['title']} ===\n{body}"
     raw = gemini_call(
         EXTRACTION_PROMPT + block,
-        max_tokens=16384,
+        max_tokens=24576,
         temperature=0.3,
         json_mode=True,
     )
@@ -981,8 +981,13 @@ def _gemini_extract_batch(articles: list[dict]) -> list:
 
 
 def gemini_extract(articles: list[dict]) -> dict:
-    """Batch extraction — splits into chunks of 12 to stay within output token limits."""
-    BATCH = 12
+    """Batch extraction — splits into chunks of 8 to stay within output token limits.
+
+    Lithuanian text tokenises at ~2 chars/token (vs ~4 for English), so a
+    12-article batch can exceed 16 k output tokens and get truncated mid-JSON.
+    8 articles × ~2000-token JSON output ≈ 16 k tokens, safely within 24 k.
+    """
+    BATCH = 8
     all_items: list = []
     for start in range(0, len(articles), BATCH):
         chunk = articles[start:start + BATCH]
