@@ -1,14 +1,16 @@
-"""Fetch VŽ articles and email them as .txt attachments.
+"""Fetch VŽ articles and email them as .html attachments.
 
 Simple pipeline — no AI, no scoring:
   1. Parse RSS, keep articles published in the last LOOKBACK_HOURS hours.
-  2. Login to vz.lt with Playwright, scrape full article bodies.
-  3. Send one email with every article as a .txt attachment named
-     {section}_{index:02d}.txt (index resets per section).
+  2. Login to vz.lt with Playwright (images/fonts allowed — looks like a real browser).
+  3. Send one email with every article as a self-contained .html file, named
+     {section}_{index:02d}_{title_slug}.html (index resets per section).
+     Opening the file in a browser shows the full article with images.
 """
 from __future__ import annotations
 
 import datetime as dt
+import html as html_mod
 import os
 import re
 import smtplib
@@ -112,10 +114,8 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                 "Chrome/130.0.0.0 Safari/537.36"
             ),
         )
-        ctx.route(
-            "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,mp4,mp3}",
-            lambda r: r.abort(),
-        )
+        # No asset blocking — let images and fonts load so the browser
+        # fingerprint looks normal and images are available in the HTML.
         page = ctx.new_page()
 
         # Login
@@ -132,11 +132,11 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
 
         for item in items:
             try:
-                page.goto(item["url"], wait_until="domcontentloaded",
+                page.goto(item["url"], wait_until="networkidle",
                           timeout=ARTICLE_TIMEOUT_MS)
-                html = page.content()
+                raw_html = page.content()
                 text = trafilatura.extract(
-                    html,
+                    raw_html,
                     include_links=False,
                     include_tables=True,
                     favor_recall=True,
@@ -148,8 +148,9 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                     print(f"  skip (paywall): {item['url']}")
                     continue
                 item["body"] = text
+                item["images"] = _extract_images(raw_html)
                 out.append(item)
-                print(f"  ok ({len(text)} chars): {item['url']}")
+                print(f"  ok ({len(text)} chars, {len(item['images'])} images): {item['url']}")
             except PWTimeout:
                 print(f"  timeout: {item['url']}")
             except Exception as e:
@@ -159,30 +160,102 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
     return out
 
 
+# ── Image extraction ──────────────────────────────────────────────────────────
+def _extract_images(raw_html: str) -> list[str]:
+    """Pull article image URLs from raw page HTML (lazy-load aware, deduped)."""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for tag in re.finditer(r'<img[^>]+>', raw_html, re.IGNORECASE):
+        t = tag.group(0)
+        # Prefer data-src (lazy-loaded) over src
+        m = re.search(r'data-src=["\']([^"\']+)["\']', t) \
+            or re.search(r'\bsrc=["\']([^"\']+)["\']', t)
+        if not m:
+            continue
+        url = m.group(1)
+        if not url.startswith("http"):
+            continue
+        # Skip tiny icons, SVGs, tracking pixels
+        if any(x in url for x in (".svg", "1x1", "pixel", "tracking", "logo")):
+            continue
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls[:12]  # cap at 12 images per article
+
+
+# ── HTML article renderer ─────────────────────────────────────────────────────
+_ARTICLE_CSS = """
+  body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:720px;
+       margin:40px auto;padding:0 24px;color:#24292f;line-height:1.7;font-size:16px}
+  h1{font-size:26px;line-height:1.3;margin:0 0 10px}
+  .meta{font-size:13px;color:#57606a;margin-bottom:28px;padding-bottom:14px;
+        border-bottom:1px solid #d0d7de}
+  .meta a{color:#0969da;text-decoration:none}
+  img{max-width:100%;height:auto;margin:20px 0;border-radius:6px;display:block}
+  p{margin:0 0 18px}
+  .footer{margin-top:40px;padding-top:14px;border-top:1px solid #d0d7de;
+          font-size:12px;color:#57606a}
+"""
+
+def _render_article_html(a: dict) -> str:
+    """Build a self-contained HTML page for one article."""
+    label    = html_mod.escape(SECTION_LABELS.get(a["section"], a["section"]))
+    title    = html_mod.escape(a["title"])
+    url      = html_mod.escape(a["url"])
+    pub      = a["published"].strftime("%Y-%m-%d %H:%M UTC")
+
+    # First image as hero, rest appended at the bottom
+    images   = a.get("images") or []
+    hero     = f'<img src="{html_mod.escape(images[0])}" alt="">' if images else ""
+    extra_imgs = "".join(
+        f'<img src="{html_mod.escape(u)}" alt="">' for u in images[1:]
+    )
+
+    # Body: split on double-newlines → paragraphs
+    paras = "\n".join(
+        f"<p>{html_mod.escape(p.strip())}</p>"
+        for p in re.split(r"\n{2,}", a["body"].strip())
+        if p.strip()
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="lt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{title}</title>
+  <style>{_ARTICLE_CSS}</style>
+</head>
+<body>
+  <h1>{title}</h1>
+  <div class="meta">
+    {label} &nbsp;&middot;&nbsp; {pub}
+    &nbsp;&middot;&nbsp; <a href="{url}">source</a>
+  </div>
+  {hero}
+  {paras}
+  {extra_imgs}
+  <div class="footer">Source: <a href="{url}">{url}</a></div>
+</body>
+</html>"""
+
+
 # ── Build attachments ─────────────────────────────────────────────────────────
 def build_attachments(articles: list[dict]) -> list[dict]:
-    """One .txt per article, named {section}_{index:02d}_{title_slug}.txt."""
-    # Group by section, preserve existing sort (section asc, published asc)
+    """One .html per article, named {section}_{index:02d}_{title_slug}.html."""
     by_section: dict[str, list[dict]] = defaultdict(list)
     for a in articles:
         by_section[a["section"]].append(a)
 
     attachments = []
     for section in sorted(by_section):
-        label = SECTION_LABELS.get(section, section)
         for idx, a in enumerate(by_section[section], 1):
-            slug = _safe_name(a["title"])
-            filename = f"{section}_{idx:02d}_{slug}.txt"
-            pub_str = a["published"].strftime("%Y-%m-%d %H:%M UTC")
-            content = (
-                f"SECTION : {label}\n"
-                f"TITLE   : {a['title']}\n"
-                f"URL     : {a['url']}\n"
-                f"PUBLISHED: {pub_str}\n"
-                f"\n{'=' * 70}\n\n"
-                f"{a['body']}\n"
-            )
-            attachments.append({"filename": filename, "content": content})
+            slug     = _safe_name(a["title"])
+            filename = f"{section}_{idx:02d}_{slug}.html"
+            content  = _render_article_html(a)
+            attachments.append({"filename": filename, "content": content,
+                                 "subtype": "html"})
     return attachments
 
 
@@ -199,7 +272,7 @@ def send_email(subject: str, html_body: str,
         alt.attach(MIMEText(html_body, "html", "utf-8"))
         msg.attach(alt)
         for att in attachments:
-            part = MIMEText(att["content"], "plain", "utf-8")
+            part = MIMEText(att["content"], att.get("subtype", "plain"), "utf-8")
             part.add_header("Content-Disposition", "attachment",
                             filename=att["filename"])
             msg.attach(part)
