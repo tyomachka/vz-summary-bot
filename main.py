@@ -1375,8 +1375,8 @@ def validate(extracted: dict, articles: list[dict]) -> dict:
         valid_snips = _dedup_snippets(valid_snips)
         valid_snips = [s for s in valid_snips if not _is_incomplete_numeric(s)]
         valid_snips = [s for s in valid_snips if len(s.split()) >= 4]  # min 4 words
-        if len(valid_snips) < 2 and not item.get("is_liveblog"):
-            _skip(item, "fewer than 2 evidence snippets verified in body")
+        if len(valid_snips) < 1 and not item.get("is_liveblog"):
+            _skip(item, "no evidence snippets verified in body")
             continue
         item["evidence_lt"] = valid_snips[:6]
 
@@ -2103,8 +2103,6 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
     all_main = top_signals + watchlist
 
     wrap = f'font-family:{_F};max-width:680px;font-size:14px;line-height:1.5'
-    if not all_main and not liveblogs:
-        return f'<div style="{wrap}"><p>No new investing-relevant VŽ articles in this period.</p></div>'
 
     # Section headings: uppercase, muted, with bottom rule
     h2s = (f'font-family:{_F};font-size:11px;color:#8c959f;text-transform:uppercase;'
@@ -2239,6 +2237,14 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
                 parts.append(f'<div style="margin:2px 0 2px 10px">&ndash; {_esc(hl)}</div>')
             parts.append("</div>")
         parts.append("</div>")
+
+    if not all_main and not liveblogs:
+        parts.append(
+            f'<p style="font-family:{_F};color:#8c959f;font-size:13px">'
+            f'No articles passed the investing-relevance filters this period.'
+            f'{"" if not skipped else f" {len(skipped)} article(s) were found but dropped — see Skipped section above."}'
+            f'</p>'
+        )
 
     # ── Footer disclaimer ─────────────────────────────────────────────
     parts.append(_FOOTER.format(F=_F))
