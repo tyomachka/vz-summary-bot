@@ -132,7 +132,7 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
 
         for item in items:
             try:
-                page.goto(item["url"], wait_until="networkidle",
+                page.goto(item["url"], wait_until="domcontentloaded",
                           timeout=ARTICLE_TIMEOUT_MS)
                 raw_html = page.content()
                 text = trafilatura.extract(
@@ -260,68 +260,22 @@ def build_attachments(articles: list[dict]) -> list[dict]:
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
-def send_email(subject: str, html_body: str,
-               attachments: list[dict] | None = None) -> None:
-    if attachments:
-        msg = MIMEMultipart("mixed")
-        msg["Subject"] = subject
-        msg["From"]    = SMTP_USER
-        msg["To"]      = SMTP_TO
-        alt = MIMEMultipart("alternative")
-        alt.attach(MIMEText("Open this email in an HTML-capable client.", "plain"))
-        alt.attach(MIMEText(html_body, "html", "utf-8"))
-        msg.attach(alt)
-        for att in attachments:
-            part = MIMEText(att["content"], att.get("subtype", "plain"), "utf-8")
-            part.add_header("Content-Disposition", "attachment",
-                            filename=att["filename"])
-            msg.attach(part)
-    else:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = SMTP_USER
-        msg["To"]      = SMTP_TO
-        msg.attach(MIMEText("Open this email in an HTML-capable client.", "plain"))
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
-
+def send_email(subject: str, attachments: list[dict]) -> None:
+    """Send email with .html file attachments and no body text."""
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = SMTP_TO
+    for att in attachments:
+        part = MIMEText(att["content"], "html", "utf-8")
+        part.add_header("Content-Disposition", "attachment",
+                        filename=att["filename"])
+        msg.attach(part)
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
         s.login(SMTP_USER, SMTP_PASSWORD)
         s.send_message(msg)
-
-
-def _index_html(articles: list[dict], today: dt.date) -> str:
-    """Simple HTML index listing every article with section + title."""
-    F = "-apple-system, 'Segoe UI', sans-serif"
-    rows = ""
-    current_section = None
-    for a in articles:
-        if a["section"] != current_section:
-            current_section = a["section"]
-            label = SECTION_LABELS.get(current_section, current_section)
-            rows += (
-                f'<tr><td colspan="2" style="padding:10px 0 4px;font-size:11px;'
-                f'color:#8c959f;text-transform:uppercase;letter-spacing:.5px;'
-                f'border-bottom:1px solid #30363d;font-family:{F}">'
-                f'{label}</td></tr>'
-            )
-        pub = a["published"].strftime("%H:%M")
-        rows += (
-            f'<tr><td style="color:#8c959f;font-size:12px;padding:4px 10px 4px 0;'
-            f'font-family:{F};white-space:nowrap">{pub}</td>'
-            f'<td style="padding:4px 0;font-size:13px;font-family:{F}">'
-            f'<a href="{a["url"]}" style="color:#4493f8;text-decoration:none">'
-            f'{a["title"]}</a></td></tr>'
-        )
-    return (
-        f'<div style="max-width:680px;font-family:{F}">'
-        f'<div style="font-size:12px;color:#8c959f;margin-bottom:16px">'
-        f'VŽ Articles &middot; {today.isoformat()} &middot; {len(articles)} fetched'
-        f' &middot; attached as .txt files</div>'
-        f'<table style="border-collapse:collapse;width:100%">{rows}</table>'
-        f'</div>'
-    )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -334,28 +288,20 @@ def run() -> None:
     print(f"RSS: {len(rss_items)} articles in window (excl. skipped sections)")
 
     if not rss_items:
-        send_email(
-            f"VŽ articles {now.date().isoformat()} — nothing in RSS window",
-            f"<p>No VŽ articles found in the last {LOOKBACK_HOURS} hours.</p>",
-        )
+        print("No articles in RSS window — nothing to send.")
         return
 
     articles = login_and_fetch(rss_items)
     print(f"Fetched {len(articles)} article bodies")
 
     if not articles:
-        send_email(
-            f"VŽ articles {now.date().isoformat()} — fetch failed",
-            "<p>Login may have failed or all articles were paywalled.</p>",
-        )
+        print("No article bodies fetched — login may have failed.")
         return
 
     attachments = build_attachments(articles)
-    html = _index_html(articles, now.date())
     send_email(
-        f"VŽ articles {now.date().isoformat()} — {len(articles)} articles",
-        html,
-        attachments=attachments,
+        f"VŽ articles {now.date().isoformat()} — {len(attachments)} articles",
+        attachments,
     )
     print(f"Sent {len(attachments)} attachments.")
 
@@ -367,9 +313,11 @@ def main() -> None:
         tb = traceback.format_exc()
         print(tb, file=sys.stderr)
         try:
+            import html as _h
+            err_html = f"<pre style='font-size:12px'>{_h.escape(tb)}</pre>"
             send_email(
                 f"VŽ fetcher FAILED {dt.datetime.now(tz=dt.timezone.utc).date()}",
-                f"<pre style='font-size:12px'>{tb}</pre>",
+                [{"filename": "error.html", "content": err_html}],
             )
         except Exception as e2:
             print(f"Failure email failed: {e2}", file=sys.stderr)
