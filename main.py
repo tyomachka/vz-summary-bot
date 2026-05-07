@@ -17,6 +17,8 @@ import time
 import unicodedata
 import traceback
 from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -2113,20 +2115,30 @@ def send_email(subject: str, html_body: str,
     """Send HTML email with optional .txt attachments.
 
     Each entry in `attachments` is {"filename": str, "content": str}.
+    Uses explicit MIME classes so attachments land in multipart/mixed,
+    not buried inside multipart/alternative.
     """
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = SMTP_USER
-    msg["To"] = SMTP_TO
-    msg.set_content("This message requires an HTML-capable email client.")
-    msg.add_alternative(html_body, subtype="html")
-    for att in (attachments or []):
-        msg.add_attachment(
-            att["content"].encode("utf-8"),
-            maintype="text",
-            subtype="plain",
-            filename=att["filename"],
-        )
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = SMTP_TO
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText("This message requires an HTML-capable email client.", "plain"))
+        alt.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(alt)
+        for att in attachments:
+            part = MIMEText(att["content"], "plain", "utf-8")
+            part.add_header("Content-Disposition", "attachment",
+                            filename=att["filename"])
+            msg.attach(part)
+    else:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = SMTP_TO
+        msg.set_content("This message requires an HTML-capable email client.")
+        msg.add_alternative(html_body, subtype="html")
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
