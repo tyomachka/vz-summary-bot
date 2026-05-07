@@ -17,6 +17,8 @@ import time
 import unicodedata
 import traceback
 from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -2310,13 +2312,48 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
 
 
 # Email
-def send_email(subject: str, html_body: str) -> None:
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = SMTP_USER
-    msg["To"] = SMTP_TO
-    msg.set_content("This message requires an HTML-capable email client.")
-    msg.add_alternative(html_body, subtype="html")
+def _build_attachments(top_signals: list[dict], fetched: list[dict]) -> list[dict]:
+    """Build .txt attachments for each Top Signal article."""
+    body_by_url = {a["url"]: a.get("body", "") for a in fetched}
+    attachments = []
+    for idx, item in enumerate(top_signals, 1):
+        url = item.get("url", "")
+        title = item.get("headline_en") or item.get("title") or f"article-{idx}"
+        body = body_by_url.get(url, "")
+        if not body:
+            continue
+        safe = re.sub(r"[^\w\s-]", "", title)
+        safe = re.sub(r"\s+", "_", safe.strip())[:60]
+        filename = f"{idx:02d}_{safe}.txt"
+        content = f"TITLE: {title}\nURL:   {url}\n\n{'=' * 60}\n\n{body}\n"
+        attachments.append({"filename": filename, "content": content})
+    return attachments
+
+
+def send_email(subject: str, html_body: str,
+               attachments: list[dict] | None = None) -> None:
+    """Send HTML email with optional .txt attachments."""
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = SMTP_TO
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText("This message requires an HTML-capable email client.", "plain"))
+        alt.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(alt)
+        for att in attachments:
+            part = MIMEText(att["content"], "plain", "utf-8")
+            part.add_header("Content-Disposition", "attachment",
+                            filename=att["filename"])
+            msg.attach(part)
+    else:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = SMTP_TO
+        msg.set_content("This message requires an HTML-capable email client.")
+        msg.add_alternative(html_body, subtype="html")
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
@@ -2382,9 +2419,12 @@ def run() -> None:
           f"Liveblogs {n_lb} | Skipped {n_skip}")
 
     html = render_html(result, now.date())
+    attachments = _build_attachments(result["top_signals"], fetched)
+    print(f"Attaching {len(attachments)} article(s)")
     send_email(
         f"VŽ summary {now.date().isoformat()} — {n_top} signals · {n_watch} watchlist",
-        html + DISCLAIMER_HTML,
+        html,
+        attachments=attachments,
     )
     save_last_run(now)
     print("Done.")
