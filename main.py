@@ -1860,7 +1860,7 @@ def _render_card(item: dict) -> str:
         f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:10px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
         # Market Read — above evidence, always present
-        + f'<div style="margin-bottom:12px;padding:8px 12px;border-left:3px solid #4493f8">'
+        + f'<div style="margin-bottom:12px;padding:8px 12px;border-left:3px solid #30363d">'
         + f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
         + f'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
         + f'<div style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</div>'
