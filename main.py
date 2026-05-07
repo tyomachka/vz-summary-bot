@@ -1747,21 +1747,19 @@ def _card_instrument_class(item: dict) -> str:
 
 
 def _format_card_meta(item: dict) -> str:
-    """Human-readable metadata line: type · instrument class · confidence."""
+    """Compact uppercase metadata: TYPE · IMPORTANCE · SCORE:XX · CONF:HIGH."""
     a_type = (item.get("article_type") or "other").lower()
-    type_label = _TYPE_READABLE.get(a_type, a_type.replace("_", " ").title())
-    instr_class = _card_instrument_class(item)
-    conf = (item.get("confidence") or "").lower()
-    conf_label = {
-        "high": "High confidence",
-        "medium": "Medium confidence",
-        "low": "Low confidence",
-    }.get(conf, "")
+    type_label = _TYPE_READABLE.get(a_type, a_type.replace("_", " ").title()).upper()
+    importance = (item.get("importance") or "").upper()
+    score = item.get("investment_score")
+    conf = (item.get("confidence") or "").upper()
     parts = [_esc(type_label)]
-    if instr_class:
-        parts.append(_esc(instr_class))
-    if conf_label:
-        parts.append(_esc(conf_label))
+    if importance:
+        parts.append(_esc(importance))
+    if score is not None:
+        parts.append(f"SCORE:{score}")
+    if conf:
+        parts.append(f"CONF:{_esc(conf)}")
     meta = " · ".join(parts)
     if item.get("is_liveblog"):
         meta += ' · <span style="color:#cf222e;font-weight:700">LIVEBLOG</span>'
@@ -1789,18 +1787,18 @@ def _fallback_market_read(item: dict) -> str:
 
 
 def _render_card(item: dict) -> str:
-    """Top Signal card: metadata / headline / Market Read / evidence / badges / entities / tickers."""
+    """Top Signal card: emoji-row format with dashed dividers."""
     headline = _esc(item.get("headline_en") or "")
     url = _esc(item.get("url") or "")
     market_read = (item.get("market_read") or "").strip()
     if not market_read:
         market_read = _fallback_market_read(item)
 
-    # Evidence: 2–4 snippets for top signals
+    # Evidence: 2–4 bullet-quote snippets
     snips = (item.get("evidence_lt") or [])[:4]
     ev_html = "".join(
-        f'<div style="margin:3px 0;font-size:12px;color:#8c959f;font-style:italic;line-height:1.4">'
-        f'&ldquo;{_esc(s)}&rdquo;</div>'
+        f'<div style="margin:3px 0;font-size:12px;color:#8c959f;line-height:1.4">'
+        f'&bull; &ldquo;{_esc(s)}&rdquo;</div>'
         for s in snips
     )
 
@@ -1814,83 +1812,65 @@ def _render_card(item: dict) -> str:
                       if (p.get("role") or "direct").lower() != "direct"]
     priv = item.get("companies_private") or []
     proxies = item.get("ticker_proxies") or []
-    sectors = [x for x in (item.get("affected_indirect") or []) if x]
-    instr_names = [ri.get("display", ri.get("symbol", ""))
-                   for ri in (item.get("resolved_instruments") or [])]
+    affected_direct = [p["name"] for p in public_direct if p.get("name")]
+    affected_indirect = [x for x in (item.get("affected_indirect") or []) if x]
 
-    def _ticker_chip(p: dict) -> str:
-        role = (p.get("role") or "direct").lower()
-        role_tag = (f'&nbsp;<span style="font-size:10px;color:#9a6700">[{_esc(role)}]</span>'
-                    if role != "direct" else "")
-        return (f'<span style="margin-right:10px;white-space:nowrap">'
-                f'<strong style="color:#4493f8">{_esc(p["ticker"])}</strong>'
-                f'<span style="color:#8c959f;font-size:11px">&nbsp;{_esc(p.get("exchange",""))}</span>'
-                f'{role_tag}</span>')
-
-    tickers_html = "".join(_ticker_chip(p) for p in public_direct)
-
-    # Badges: skip unknown/unclear values
+    # Signal badges: "Fundamental: bullish", "Market: positive", "Tradability: direct"
     badge_parts = []
     if fund not in ("unclear",):
-        badge_parts.append(_badge(fund.capitalize(), _FUND_COLORS.get(fund, "#57606a")))
+        badge_parts.append(_badge(f"Fundamental: {fund}", _FUND_COLORS.get(fund, "#57606a")))
     if react not in ("unknown",):
-        badge_parts.append(_badge(react.capitalize(), _REACT_COLORS.get(react, "#8c959f")))
-    badge_parts.append(_badge(trade.capitalize(), _TRADE_COLORS.get(trade, "#57606a")))
+        badge_parts.append(_badge(f"Market: {react}", _REACT_COLORS.get(react, "#8c959f")))
+    badge_parts.append(_badge(f"Tradability: {trade}", _TRADE_COLORS.get(trade, "#57606a")))
     badges_html = "".join(badge_parts)
 
-    # Entity rows: email-safe (no display:inline-block on spans)
-    def _entity_row(label: str, items_: list, color: str = "#cdd0d4") -> str:
-        if not items_:
-            return ""
-        content = ", ".join(_esc(str(x)) for x in items_[:6])
-        return (f'<div style="margin:4px 0;font-size:12px;line-height:1.5">'
-                f'<span style="color:#57606a">{label}:&nbsp;</span>'
-                f'<span style="color:{color}">{content}</span></div>')
+    # Tickers row: all public tickers, related flagged with [related]
+    def _ticker_chip(p: dict) -> str:
+        role = (p.get("role") or "direct").lower()
+        role_tag = (f'&nbsp;<span style="font-size:10px;color:#9a6700">[related]</span>'
+                    if role != "direct" else "")
+        exch = p.get("exchange", "")
+        return (f'<span style="margin-right:12px;white-space:nowrap">'
+                f'<strong style="color:#4493f8">{_esc(p["ticker"])}</strong>'
+                + (f'<span style="color:#8c959f;font-size:11px">&nbsp;({_esc(exch)})</span>' if exch else "")
+                + f'{role_tag}</span>')
 
-    entity_html = (
-        _entity_row("Direct", [p["name"] for p in public_direct if p.get("name")])
-        + _entity_row("Related public", [p["name"] for p in public_related if p.get("name")])
-        + _entity_row("Private", [p.get("name", "?") for p in priv])
-        + _entity_row("Sectors", sectors, "#8c959f")
-        + _entity_row("Instruments", instr_names, "#8c959f")
-    )
+    all_public = public_direct + public_related
+    tickers_content = "".join(_ticker_chip(p) for p in all_public) if all_public else ""
+
+    # Proxies: plain ticker list
+    proxies_content = " &middot; ".join(_esc(str(x)) for x in proxies[:6]) if proxies else ""
+
+    # Private companies
+    priv_content = ", ".join(_esc(p.get("name", "?")) for p in priv[:6]) if priv else ""
+
+    # Affected row: Direct: X, Y | Indirect: Z
+    affected_parts = []
+    if affected_direct:
+        affected_parts.append(f'<strong>Direct:</strong> {", ".join(_esc(x) for x in affected_direct[:4])}')
+    if affected_indirect:
+        affected_parts.append(f'<strong>Indirect:</strong> {", ".join(_esc(x) for x in affected_indirect[:4])}')
+    affected_content = " &nbsp;|&nbsp; ".join(affected_parts)
 
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
         f'margin:0 0 16px;font-family:{_F};max-width:680px">'
-        # metadata: human-readable, no score/conf debug text
+        # header block: metadata + headline + evidence, dashed bottom border
+        f'<div style="border-bottom:1px dashed #444c56;padding-bottom:12px;margin-bottom:14px">'
         f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-        f'letter-spacing:.5px;margin-bottom:6px">{_format_card_meta(item)}</div>'
-        # headline
+        f'letter-spacing:.5px;margin-bottom:6px">&#128240; {_format_card_meta(item)}</div>'
         f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:10px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
-        # Market Read — above evidence, always present
-        + '<div style="margin-bottom:12px">'
-        + '<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-        + 'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
-        + '<div style="padding:8px 12px;border-left:3px solid #4493f8">'
-        + f'<span style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</span>'
-        + '</div></div>'
-        # evidence block — secondary, below Market Read
-        + ('<div style="margin-bottom:12px">'
-           '<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
-           'letter-spacing:.4px;margin-bottom:4px">Evidence</div>'
-           f'<div style="padding:8px 12px;border-left:3px solid #30363d">{ev_html}</div></div>'
+        + (f'<div style="padding-left:10px;border-left:2px solid #30363d">{ev_html}</div>'
            if ev_html else "")
-        # signal badges
-        + f'<div style="margin-bottom:10px">{badges_html}</div>'
-        # entity rows
-        + ('<div style="margin-bottom:10px;padding-left:10px;border-left:2px solid #30363d">'
-           + entity_html + "</div>"
-           if entity_html else "")
-        # tickers / proxies footer
-        + ('<div style="font-size:12px;padding-top:8px;border-top:1px solid #30363d">'
-           '<span style="color:#8c959f;text-transform:uppercase;font-size:11px;'
-           f'letter-spacing:.4px">Tickers:&nbsp;</span>{tickers_html}'
-           + (f'&nbsp;&nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>'
-              if proxies else "")
-           + "</div>"
-           if tickers_html or proxies else "")
+        + '</div>'
+        # body rows: emoji-labeled
+        + _row("&#127760;", "Market read", f'<span style="color:#cdd0d4">{_esc(market_read)}</span>')
+        + _row("&#128200;", "Signal", badges_html)
+        + (_row("&#127919;", "Affected", affected_content) if affected_content else "")
+        + (_row("&#128202;", "Tickers", tickers_content) if tickers_content else "")
+        + (_row("&#127970;", "Private", f'<span style="color:#8c959f">{priv_content}</span>') if priv_content else "")
+        + (_row("&#128301;", "Proxies", f'<span style="color:#8c959f">{proxies_content}</span>') if proxies_content else "")
         + "</div>"
     )
 
