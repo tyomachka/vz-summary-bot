@@ -2,53 +2,44 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Architecture
+## What this repo does
 
-A single-file Python pipeline (`main.py`) run by GitHub Actions on a daily cron, with state committed back to the repo. There is no codebase to "build" — the only deliverable is `main.py` + the workflow YAML.
+A single-file Python script (`fetch_articles.py`) run by GitHub Actions on a daily cron. It fetches new Verslo žinios articles, builds a self-contained `.html` file per article (with images), and emails them all as attachments. No AI, no scoring, no state file.
 
-**Pipeline stages (sequential in `run()`):**
-1. `load_last_run()` reads `state/last_run.json`.
-2. `fetch_rss()` pulls VŽ's RSS, keeps articles published after `last_run`.
-3. `tier_filter()` partitions by `HIGH_TIER` / `CONDITIONAL_TIER` / `SKIP_TIER` — keyed on the first URL path segment (`/finansai/...` → `"finansai"`). Unknown sections fall into conditional.
-4. `pre_filter_conditional()` sends conditional-tier titles+teasers to Gemini for a yes/no investing-relevance check (returns indices to keep).
-5. `login_and_fetch()` — Playwright headless Chromium logs into `prisijungimas.vz.lt`, then fetches each article URL and runs `trafilatura.extract` to get clean main text. Skips articles whose extracted body is <300 chars or contains paywall markers.
-6. `gemini_extract()` — single batched call, JSON mode (`response_mime_type="application/json"`), produces the structured items.
-7. `validate()` — **the core anti-hallucination guard**: every item's `source_quote_lt` must be a normalized substring of its article's body, otherwise dropped. Substring check runs in Python, not in another LLM call.
-8. `gemini_render()` renders validated JSON → HTML.
-9. `send_email()` via Gmail SMTP.
-10. `save_last_run(now)` writes new state. The workflow's "Commit updated state" step pushes it back; this happens **only if `run()` returns successfully**, so a failed run replays the same window next time.
+## Pipeline (sequential in `run()`)
 
-**Failure path:** `main()` wraps `run()` in try/except. On any exception, it emails the full traceback to `SMTP_TO`, then `sys.exit(1)`. The state file is NOT updated on failure (because the commit step is `if: success()`).
+1. `fetch_rss()` — pull VŽ's RSS, keep articles published in the last `LOOKBACK_HOURS` (26h) window. Skip `SKIP_SECTIONS` (lifestyle / luxury). Hard cap: `MAX_ARTICLES = 60`.
+2. `login_and_fetch()` — Playwright headless Chromium logs into `prisijungimas.vz.lt`, fetches each article URL, runs `trafilatura.extract` on the page HTML for clean main text, and pulls image URLs from `<img>` tags (preferring `data-src` for lazy-loaded images). Drops articles whose extracted body is <200 chars or contains paywall markers.
+3. `build_attachments()` — for each article, render a self-contained HTML page (`_render_article_html`) and name it `{section}_{idx:02d}_{title_slug}.html`.
+4. `send_email()` — single Gmail SMTP message with all `.html` files as attachments and **no body text**. A `pipeline-log.html` is included as the first attachment for diagnostics.
 
-**Gemini retry:** `gemini_call()` has its own backoff loop on `{429, 500, 502, 503, 504}` (6 attempts, exponential 2s→60s with 0.5–1.5× jitter). 4xx errors fail fast.
+## Failure path
 
-## Working with the pipeline
+`main()` wraps `run()` in try/except. On any exception, it sends a failure email with the traceback as `error.html` attachment, then `sys.exit(1)`. There is no state file — every run looks back a fixed window, so a failed run replays naturally on the next cron.
 
-**Run locally** (requires all 6 secrets as env vars, plus `pip install -r requirements.txt && python -m playwright install chromium`):
+If RSS is empty or login/fetch yields zero articles, a diagnostic email is still sent so failures are visible.
+
+## Things to watch for
+
+- **Login is two-step**: fill `#email` → click `button:has-text("Prisijungti")` → wait for `input[type='password']` → fill → submit → `wait_for_url(lambda u: "slaptazodis" not in u)`. Skipping the URL wait races the SPA's auth POST and you'll fetch unauthenticated. Verified by checking for "Atsijungti" on the homepage.
+- **No asset blocking**: images and fonts are allowed to load — both because the user wants images in the output HTML, and because a fully-rendered browser fingerprint is less likely to trip bot detection.
+- **Image extraction is regex-based** on the raw page HTML, not via DOM queries. Prefers `data-src` over `src` (lazy-loaded), filters out SVGs / pixel trackers / logos, caps at 12 per article.
+- **Paywall detection** runs on the extracted body text (`PAYWALL_MARKERS`). If login worked but a specific article still hits the marker, that article is dropped — the rest of the run continues.
+- **Attachments use `MIMEText(content, "html", "utf-8")` with `Content-Disposition: attachment`** so Gmail treats them as downloadable files, not as the email body.
+
+## Workflow
+
+`.github/workflows/fetch-articles.yml` — cron `0 5 * * *` UTC + `workflow_dispatch`. Installs deps and runs `python fetch_articles.py`. No `permissions: contents: write` needed — nothing is committed back.
+
+## Running locally
+
+Requires the 5 secrets as env vars, plus:
 ```powershell
-python main.py
+pip install -r requirements.txt
+python -m playwright install chromium
+python fetch_articles.py
 ```
 
-**Trigger workflow remotely** (Actions tab → "Daily VŽ Summary" → Run workflow), or:
-```bash
-gh workflow run "Daily VŽ Summary"
-```
+## Secrets
 
-**Replay a different time window:** edit `state/last_run.json` and push. Next run picks up everything published since that timestamp (capped at `MAX_ARTICLES = 20`).
-
-**Iterate on prompts:** `EXTRACTION_PROMPT` and `RENDER_PROMPT` are top-level strings in `main.py`. The validation step in `validate()` enforces the source-quote contract regardless of what Gemini outputs — never weaken that without a replacement guardrail.
-
-## Things that will surprise you
-
-- **Login is two-step**: `#email` field → click `button:has-text("Prisijungti")` → wait for `input[type="password"]` → fill → click submit → `wait_for_url(lambda u: "slaptazodis" not in u)`. Skipping the URL wait races the SPA's auth POST and you'll fetch articles unauthenticated. Verified by checking for "Atsijungti" on the homepage post-login.
-- **Images, fonts, and media are network-blocked** in the Playwright context (`ctx.route` aborting `*.{png,jpg,...}`) for speed. If a future feature needs images, scope the route narrower.
-- **Article body is capped at 5000 chars** before sending to Gemini in `gemini_extract`. Gemini hit `max_output_tokens` mid-JSON when this was 8000 with 20 articles batched.
-- **Two paywall checks**: PAYWALL_TEXT_MARKERS in `login_and_fetch()` (rejects articles whose extracted text contains the marker — i.e. login session didn't apply for that article); the `validate()` substring check (rejects items Gemini fabricated even if login worked).
-- **Conditional-tier handling**: pre-filter is best-effort. If Gemini's pre-filter response can't be parsed, it returns all conditional items unchanged (fail-open) rather than dropping them.
-
-## Workflow specifics
-
-- Uses `actions/checkout@v4` and `actions/setup-python@v5` (Node 20 deprecation warning currently — non-blocking until 2026-09-16).
-- Cron `30 4 * * *` UTC (≈07:30 EEST summer / ≈06:30 EET winter). Vilnius DST is not handled.
-- `permissions: contents: write` is required so the post-run state commit can push back.
-- `concurrency: group: daily-summary, cancel-in-progress: false` prevents overlapping runs from manual+cron collision but lets a manual run finish if cron fires.
+`VZ_EMAIL`, `VZ_PASSWORD`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_TO` (last is optional, defaults to `SMTP_USER`).
