@@ -597,12 +597,12 @@ DISCLAIMER_HTML = (
 
 # State
 def load_last_run() -> dt.datetime:
-    # TESTING: always look back 14 h so articles are always present.
-    # Remove this line and uncomment the block below to restore normal behaviour.
-    return dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(hours=14)
-    if not STATE_FILE.exists():  # noqa: unreachable
-        return dt.datetime.fromtimestamp(0, tz=dt.timezone.utc)
-    return dt.datetime.fromisoformat(json.loads(STATE_FILE.read_text())["last_run_iso"])
+    floor = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(hours=14)
+    if not STATE_FILE.exists():
+        return floor
+    saved = dt.datetime.fromisoformat(json.loads(STATE_FILE.read_text())["last_run_iso"])
+    # Always look back at least 14 h so a recent state file can't shrink the window
+    return min(saved, floor)
 
 
 def save_last_run(now: dt.datetime) -> None:
