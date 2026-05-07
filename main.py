@@ -595,9 +595,12 @@ DISCLAIMER_HTML = (
 
 # State
 def load_last_run() -> dt.datetime:
+    floor = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(hours=14)
     if not STATE_FILE.exists():
-        return dt.datetime.fromtimestamp(0, tz=dt.timezone.utc)
-    return dt.datetime.fromisoformat(json.loads(STATE_FILE.read_text())["last_run_iso"])
+        return floor
+    saved = dt.datetime.fromisoformat(json.loads(STATE_FILE.read_text())["last_run_iso"])
+    # Always look back at least 14 h so a recent state file can't shrink the window
+    return min(saved, floor)
 
 
 def save_last_run(now: dt.datetime) -> None:
