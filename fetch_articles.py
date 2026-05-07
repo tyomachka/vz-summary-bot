@@ -79,17 +79,29 @@ def _safe_name(text: str, maxlen: int = 50) -> str:
 
 
 # ── RSS ───────────────────────────────────────────────────────────────────────
-def fetch_rss(since: dt.datetime) -> list[dict]:
+def fetch_rss(since: dt.datetime) -> tuple[list[dict], dict]:
     feed = feedparser.parse(RSS_URL)
+    diag = {
+        "total": len(feed.entries),
+        "bozo": bool(feed.get("bozo")),
+        "bozo_exc": str(feed.get("bozo_exception", "")),
+        "no_date": 0, "too_old": 0, "skipped_section": 0,
+        "newest": None,
+    }
     items = []
     for entry in feed.entries:
         if not getattr(entry, "published_parsed", None):
+            diag["no_date"] += 1
             continue
         pub = dt.datetime(*entry.published_parsed[:6], tzinfo=dt.timezone.utc)
+        if diag["newest"] is None or pub > diag["newest"]:
+            diag["newest"] = pub
         if pub <= since:
+            diag["too_old"] += 1
             continue
         section = _url_section(entry.link)
         if section in SKIP_SECTIONS:
+            diag["skipped_section"] += 1
             continue
         items.append({
             "title":   entry.title,
@@ -98,7 +110,7 @@ def fetch_rss(since: dt.datetime) -> list[dict]:
             "published": pub,
         })
     items.sort(key=lambda x: (x["section"], x["published"]))
-    return items[:MAX_ARTICLES]
+    return items[:MAX_ARTICLES], diag
 
 
 # ── Playwright login + scrape ─────────────────────────────────────────────────
@@ -279,31 +291,55 @@ def send_email(subject: str, attachments: list[dict]) -> None:
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+def _diag_attachment(lines: list[str]) -> dict:
+    content = "<!DOCTYPE html><html><body><pre style='font-family:monospace;font-size:13px'>"
+    content += html_mod.escape("\n".join(lines))
+    content += "</pre></body></html>"
+    return {"filename": "pipeline-log.html", "content": content}
+
+
 def run() -> None:
     now   = dt.datetime.now(tz=dt.timezone.utc)
     since = now - dt.timedelta(hours=LOOKBACK_HOURS)
-    print(f"Fetching articles published after {since.isoformat()}")
+    log   = [f"Window : {since.isoformat()} → {now.isoformat()}"]
 
-    rss_items = fetch_rss(since=since)
-    print(f"RSS: {len(rss_items)} articles in window (excl. skipped sections)")
+    rss_items, diag = fetch_rss(since=since)
+    newest = diag["newest"].isoformat() if diag["newest"] else "none"
+    log += [
+        f"RSS     : {diag['total']} entries | bozo={diag['bozo']}"
+        + (f" ({diag['bozo_exc']})" if diag["bozo"] else ""),
+        f"Newest  : {newest}",
+        f"No date : {diag['no_date']} | Too old: {diag['too_old']} "
+        f"| Skipped section: {diag['skipped_section']} | In window: {len(rss_items)}",
+    ]
+    print("\n".join(log))
 
     if not rss_items:
-        print("No articles in RSS window — nothing to send.")
+        send_email(
+            f"VŽ articles {now.date().isoformat()} — RSS empty",
+            [_diag_attachment(log + ["→ No articles in the 26h window."])],
+        )
         return
 
     articles = login_and_fetch(rss_items)
-    print(f"Fetched {len(articles)} article bodies")
+    log.append(f"Fetched : {len(articles)} / {len(rss_items)} article bodies")
+    print(log[-1])
 
     if not articles:
-        print("No article bodies fetched — login may have failed.")
+        send_email(
+            f"VŽ articles {now.date().isoformat()} — login/fetch failed",
+            [_diag_attachment(log + ["→ Login may have failed or all articles paywalled."])],
+        )
         return
 
     attachments = build_attachments(articles)
+    log.append(f"Sending : {len(attachments)} attachments")
+    attachments.insert(0, _diag_attachment(log))   # log as first attachment
     send_email(
-        f"VŽ articles {now.date().isoformat()} — {len(attachments)} articles",
+        f"VŽ articles {now.date().isoformat()} — {len(articles)} articles",
         attachments,
     )
-    print(f"Sent {len(attachments)} attachments.")
+    print(f"Done. Sent {len(attachments)} attachments.")
 
 
 def main() -> None:
