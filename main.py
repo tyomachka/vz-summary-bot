@@ -2073,7 +2073,8 @@ def _render_instruments_stacked(instruments: list[dict]) -> str:
             name_bits.append(f'<span style="color:#8c959f;font-size:11px">{symbol}</span>')
         if unit:
             name_bits.append(f'<span style="color:#8c959f;font-size:11px">{_esc(unit)}</span>')
-        name_html = ' <span style="color:#444c56">·</span> '.join(name_bits)
+        sep = ' <span style="color:#57606a">&nbsp;&middot;&nbsp;</span>'
+        name_html = sep.join(name_bits)
 
         dir_badge = (_badge(direction.capitalize(), dir_color)
                      if direction not in ("unclear",) else "")
@@ -2081,10 +2082,10 @@ def _render_instruments_stacked(instruments: list[dict]) -> str:
         cards.append(
             f'<div style="border:1px solid #444c56;border-radius:6px;'
             f'padding:10px 14px;margin-bottom:8px;font-family:{_F}">'
-            f'<div style="margin-bottom:6px;display:flex;align-items:center;'
-            f'gap:6px;flex-wrap:wrap">'
-            f'{name_html}'
-            f'<span>{_badge(ac_label, "#0969da")}{dir_badge}</span></div>'
+            # name on its own line
+            f'<div style="margin-bottom:5px">{name_html}</div>'
+            # badges on the next line
+            f'<div style="margin-bottom:6px">{_badge(ac_label, "#0969da")}{dir_badge}</div>'
             + (f'<div style="font-size:12px;color:#8c959f;font-style:italic;margin-bottom:4px;'
                f'line-height:1.4">&ldquo;{_esc(first_snip)}&rdquo;</div>'
                if first_snip else "")
