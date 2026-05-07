@@ -1796,8 +1796,8 @@ def _render_card(item: dict) -> str:
     if not market_read:
         market_read = _fallback_market_read(item)
 
-    # Evidence: 5 snippets max for top signals
-    snips = (item.get("evidence_lt") or [])[:5]
+    # Evidence: 2–4 snippets for top signals
+    snips = (item.get("evidence_lt") or [])[:4]
     ev_html = "".join(
         f'<div style="margin:3px 0;font-size:12px;color:#8c959f;font-style:italic;line-height:1.4">'
         f'&ldquo;{_esc(s)}&rdquo;</div>'
@@ -1820,16 +1820,16 @@ def _render_card(item: dict) -> str:
 
     def _ticker_chip(p: dict) -> str:
         role = (p.get("role") or "direct").lower()
-        role_tag = (f' <span style="font-size:10px;color:#9a6700">[{_esc(role)}]</span>'
+        role_tag = (f'&nbsp;<span style="font-size:10px;color:#9a6700">[{_esc(role)}]</span>'
                     if role != "direct" else "")
         return (f'<span style="margin-right:10px;white-space:nowrap">'
                 f'<strong style="color:#4493f8">{_esc(p["ticker"])}</strong>'
-                f'<span style="color:#8c959f;font-size:11px"> {_esc(p.get("exchange",""))}</span>'
+                f'<span style="color:#8c959f;font-size:11px">&nbsp;{_esc(p.get("exchange",""))}</span>'
                 f'{role_tag}</span>')
 
     tickers_html = "".join(_ticker_chip(p) for p in public_direct)
 
-    # Badges: skip unknown/unclear values to avoid unfinished-looking badges
+    # Badges: skip unknown/unclear values
     badge_parts = []
     if fund not in ("unclear",):
         badge_parts.append(_badge(fund.capitalize(), _FUND_COLORS.get(fund, "#57606a")))
@@ -1838,56 +1838,56 @@ def _render_card(item: dict) -> str:
     badge_parts.append(_badge(trade.capitalize(), _TRADE_COLORS.get(trade, "#57606a")))
     badges_html = "".join(badge_parts)
 
-    # Entity rows: compact labeled lines, no background box
+    # Entity rows: email-safe (no display:inline-block on spans)
     def _entity_row(label: str, items_: list, color: str = "#cdd0d4") -> str:
         if not items_:
             return ""
         content = ", ".join(_esc(str(x)) for x in items_[:6])
         return (f'<div style="margin:4px 0;font-size:12px;line-height:1.5">'
-                f'<span style="color:#57606a;min-width:150px;display:inline-block">{label}:</span>'
+                f'<span style="color:#57606a">{label}:&nbsp;</span>'
                 f'<span style="color:{color}">{content}</span></div>')
 
     entity_html = (
-        _entity_row("Direct companies", [p["name"] for p in public_direct if p.get("name")])
+        _entity_row("Direct", [p["name"] for p in public_direct if p.get("name")])
         + _entity_row("Related public", [p["name"] for p in public_related if p.get("name")])
-        + _entity_row("Private companies", [p.get("name", "?") for p in priv])
-        + _entity_row("Sectors / themes", sectors, "#8c959f")
-        + _entity_row("Instruments / indexes", instr_names, "#8c959f")
+        + _entity_row("Private", [p.get("name", "?") for p in priv])
+        + _entity_row("Sectors", sectors, "#8c959f")
+        + _entity_row("Instruments", instr_names, "#8c959f")
     )
 
     return (
         f'<div style="border:1px solid #444c56;border-radius:8px;padding:16px 18px;'
-        f'margin:0 0 18px;font-family:{_F};max-width:680px">'
+        f'margin:0 0 16px;font-family:{_F};max-width:680px">'
         # metadata: human-readable, no score/conf debug text
-        f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
+        f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
         f'letter-spacing:.5px;margin-bottom:6px">{_format_card_meta(item)}</div>'
         # headline
         f'<div style="font-size:15px;font-weight:700;line-height:1.35;margin-bottom:10px">'
         f'<a href="{url}" style="color:#4493f8;text-decoration:none">{headline}</a></div>'
         # Market Read — above evidence, always present
-        + f'<div style="margin-bottom:12px">'
-        + f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
-        + f'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
-        + f'<div style="padding:8px 12px;border-left:3px solid #4493f8">'
+        + '<div style="margin-bottom:12px">'
+        + '<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+        + 'letter-spacing:.4px;margin-bottom:4px">Market Read</div>'
+        + '<div style="padding:8px 12px;border-left:3px solid #4493f8">'
         + f'<span style="font-size:13px;color:#cdd0d4;line-height:1.55">{_esc(market_read)}</span>'
         + '</div></div>'
-        # evidence block — below Market Read, secondary
-        + (f'<div style="margin-bottom:12px">'
-           f'<div style="font-size:11px;color:#57606a;text-transform:uppercase;'
-           f'letter-spacing:.4px;margin-bottom:4px">Evidence</div>'
+        # evidence block — secondary, below Market Read
+        + ('<div style="margin-bottom:12px">'
+           '<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+           'letter-spacing:.4px;margin-bottom:4px">Evidence</div>'
            f'<div style="padding:8px 12px;border-left:3px solid #30363d">{ev_html}</div></div>'
            if ev_html else "")
         # signal badges
-        + f'<div style="margin-bottom:12px">{badges_html}</div>'
+        + f'<div style="margin-bottom:10px">{badges_html}</div>'
         # entity rows
-        + (f'<div style="margin-bottom:10px;padding-left:12px;border-left:2px solid #30363d">'
+        + ('<div style="margin-bottom:10px;padding-left:10px;border-left:2px solid #30363d">'
            + entity_html + "</div>"
            if entity_html else "")
         # tickers / proxies footer
-        + (f'<div style="font-size:12px;padding-top:8px;border-top:1px solid #30363d">'
-           f'<span style="color:#57606a;text-transform:uppercase;font-size:11px;'
-           f'letter-spacing:.4px">Tickers: </span>{tickers_html}'
-           + (f' &nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>'
+        + ('<div style="font-size:12px;padding-top:8px;border-top:1px solid #30363d">'
+           '<span style="color:#8c959f;text-transform:uppercase;font-size:11px;'
+           f'letter-spacing:.4px">Tickers:&nbsp;</span>{tickers_html}'
+           + (f'&nbsp;&nbsp;<span style="font-size:11px;color:#8c959f">Proxies: {_join(proxies)}</span>'
               if proxies else "")
            + "</div>"
            if tickers_html or proxies else "")
@@ -1944,39 +1944,37 @@ def _render_watchlist_row(item: dict) -> str:
 
 
 def _render_liveblog_row(sub: dict) -> str:
-    """Render one liveblog subitem (timestamped entry from Dienos Pulsas)."""
+    """Render one liveblog subitem (timestamped entry)."""
     time_str = _esc(sub.get("time") or "")
     headline = _esc(sub.get("headline_en") or "")
     brief_lt = _esc(sub.get("brief_lt") or "")
     url = _esc(sub.get("_parent_url") or "")
     signal = (sub.get("signal") or "unclear").lower()
     entities = sub.get("entities") or []
-    score = sub.get("investment_score", "")
     sig_color = _FUND_COLORS.get(signal, "#8c959f")
 
     ent_html = (
-        f' <span style="font-size:11px;color:#8c959f">'
+        f'<span style="font-size:11px;color:#8c959f">&nbsp;·&nbsp;'
         + ", ".join(_esc(e) for e in entities[:3])
         + "</span>"
     ) if entities else ""
 
+    signal_badge = (_badge(signal.capitalize(), sig_color)
+                    if signal not in ("unclear", "neutral") else "")
+
     return (
-        f'<div style="padding:8px 0;border-bottom:1px solid #30363d;font-family:{_F}'
-        f';display:flex;align-items:flex-start;gap:10px">'
-        + (f'<span style="font-size:11px;color:#8c959f;white-space:nowrap;padding-top:2px">{time_str}</span>'
+        f'<div style="padding:8px 0;border-bottom:1px solid #30363d;font-family:{_F}">'
+        + (f'<span style="font-size:11px;color:#8c959f">{time_str}&nbsp;·&nbsp;</span>'
            if time_str else '')
-        + f'<div>'
         + (f'<a href="{url}" style="color:#4493f8;text-decoration:none;font-size:13px;font-weight:600">'
            f'{headline}</a>'
-           if url else f'<span style="font-size:13px;font-weight:600">{headline}</span>')
+           if url else f'<span style="font-size:13px;font-weight:600;color:#cdd0d4">{headline}</span>')
         + ent_html
-        + (f'<div style="font-size:12px;color:#8c959f;font-style:italic;margin-top:2px">"{brief_lt}"</div>'
+        + (f'<div style="font-size:12px;color:#8c959f;font-style:italic;margin-top:2px">'
+           f'&ldquo;{brief_lt}&rdquo;</div>'
            if brief_lt else '')
-        + f'<div style="margin-top:3px">'
-        + _badge(signal, sig_color)
-        + (f'<span style="font-size:10px;color:#8c959f">score:{score}</span>' if score else '')
+        + (f'<div style="margin-top:4px">{signal_badge}</div>' if signal_badge else '')
         + '</div>'
-        + '</div></div>'
     )
 
 
@@ -2105,6 +2103,15 @@ def _render_instruments_stacked(instruments: list[dict]) -> str:
     return "".join(cards)
 
 
+_FOOTER = (
+    '<div style="margin-top:32px;padding-top:12px;border-top:1px solid #30363d;'
+    'font-size:11px;color:#57606a;line-height:1.6;font-family:{F}">'
+    'AI-generated summary &mdash; verify with primary sources before acting. '
+    'Not financial advice. Sources: Verslo &Zcaron;inios (vz.lt).'
+    '</div>'
+)
+
+
 def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
     top_signals: list[dict] = result.get("top_signals") or []
     watchlist: list[dict] = result.get("watchlist") or []
@@ -2117,29 +2124,30 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
     if not all_main and not liveblogs:
         return f'<div style="{wrap}"><p>No new investing-relevant VŽ articles in this period.</p></div>'
 
-    h2s = (f'font-family:{_F};font-size:11px;color:#57606a;text-transform:uppercase;'
+    # Section headings: uppercase, muted, with bottom rule
+    h2s = (f'font-family:{_F};font-size:11px;color:#8c959f;text-transform:uppercase;'
            f'letter-spacing:.8px;margin:28px 0 10px;font-weight:700;'
            f'border-bottom:1px solid #30363d;padding-bottom:5px')
 
-    # Dynamic section letter — sections are lettered sequentially, no gaps
+    # Sequential section lettering — no gaps regardless of which sections are present
     _letter_ord = [ord("A")]
 
     def _section(title: str) -> str:
         letter = chr(_letter_ord[0])
         _letter_ord[0] += 1
-        return f'<h2 style="{h2s}">{letter} · {title}</h2>'
+        return f'<h2 style="{h2s}">{letter} &middot; {title}</h2>'
 
     parts = [
         f'<div style="{wrap}">',
-        f'<div style="font-size:11px;color:#57606a;margin-bottom:20px;font-family:{_F}">'
-        f'VŽ Investment Brief · {today.isoformat()} · '
-        f'{len(top_signals)} signals · {len(watchlist)} watchlist · '
-        f'{len(liveblogs)} day-pulse items</div>',
+        # Header meta line
+        f'<div style="font-size:12px;color:#8c959f;margin-bottom:20px;font-family:{_F}">'
+        f'VŽ Investment Brief &nbsp;&middot;&nbsp; {today.strftime("%d %b %Y")} &nbsp;&middot;&nbsp; '
+        f'{len(top_signals)} signal{"s" if len(top_signals) != 1 else ""}'
+        f' &nbsp;&middot;&nbsp; {len(watchlist)} watchlist</div>',
     ]
 
     # ── A · Executive Brief ───────────────────────────────────────────
-    # Top signals first (investable angle), then watchlist to fill if space remains.
-    # Cap at 6 bullets; each sentence max 24 words.
+    # Top signals first, then watchlist. Cap at 6 bullets, max 24 words each.
     brief_primary = sorted(top_signals, key=lambda x: -x.get("investment_score", 0))
     brief_secondary = sorted(watchlist, key=lambda x: -x.get("investment_score", 0))
     bullets: list[str] = []
@@ -2168,12 +2176,7 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
         _add_brief_bullet(item)
     for item in brief_secondary:
         _add_brief_bullet(item)
-
-    lb_brief_sorted = sorted(
-        [s for s in liveblogs if s.get("investment_score", 0) >= _SCORE_BRIEF],
-        key=lambda x: -x.get("investment_score", 0),
-    )
-    for sub in lb_brief_sorted:
+    for sub in sorted(liveblogs, key=lambda x: -x.get("investment_score", 0)):
         if len(bullets) >= 6:
             break
         h = (sub.get("headline_en") or "").strip()
@@ -2190,7 +2193,8 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
             f'<ul style="margin:0;padding-left:20px">'
         )
         parts.extend(
-            f'<li style="margin:8px 0;font-size:14px;line-height:1.5">{_esc(b)}</li>'
+            f'<li style="margin:7px 0;font-size:14px;line-height:1.5;color:#cdd0d4">'
+            f'{_esc(b)}</li>'
             for b in bullets
         )
         parts.append("</ul></div>")
@@ -2200,49 +2204,62 @@ def render_html(result: dict, today: dt.date, show_debug: bool = False) -> str:
         parts.append(_section("Top Signals"))
         parts.extend(_render_card(c) for c in top_signals)
 
-    # ── C · Day Pulse — always lettered; shows placeholder if empty ───
-    parts.append(_section("Day Pulse"))
-    if liveblogs:
-        parts.append(f'<div style="font-family:{_F}">')
-        parts.extend(_render_liveblog_row(s) for s in liveblogs)
-        parts.append("</div>")
-    else:
-        parts.append(
-            f'<div style="font-size:13px;color:#57606a;font-style:italic;'
-            f'padding:6px 0 12px">No liveblog items in this run.</div>'
-        )
-
-    # ── D · Watchlist ─────────────────────────────────────────────────
-    if watchlist:
-        parts.append(_section("Watchlist"))
-        parts.extend(_render_watchlist_row(i) for i in watchlist)
-
-    # ── E · Direct Public Tickers (mobile-friendly stacked) ───────────
+    # ── C · Direct Public Tickers ─────────────────────────────────────
     ticker_html = _render_tickers_stacked(top_signals + watchlist)
     if ticker_html:
         parts.append(_section("Direct Public Tickers"))
         parts.append(ticker_html)
 
-    # ── F · Market Instruments (mobile-friendly stacked) ─────────────
+    # ── D · Market Instruments ────────────────────────────────────────
     instr_html = _render_instruments_stacked(instruments)
     if instr_html:
         parts.append(_section("Market Instruments"))
         parts.append(instr_html)
 
-    # ── G · Debug footer (off by default) ─────────────────────────────
-    if show_debug and skipped:
+    # ── E · Macro / Sector / Private Watchlist ────────────────────────
+    # Includes both watchlist articles and any live-update subitems
+    has_watchlist_content = bool(watchlist or liveblogs)
+    if has_watchlist_content:
+        parts.append(_section("Macro / Sector / Private Watchlist"))
+        for i in watchlist:
+            parts.append(_render_watchlist_row(i))
+        if liveblogs:
+            if watchlist:
+                parts.append(
+                    f'<div style="font-size:11px;color:#8c959f;text-transform:uppercase;'
+                    f'letter-spacing:.6px;margin:14px 0 6px">Live Updates</div>'
+                )
+            parts.append(f'<div style="font-family:{_F}">')
+            for s in liveblogs:
+                parts.append(_render_liveblog_row(s))
+            parts.append("</div>")
+
+    # ── F · Skipped / Low Relevance — always shown, compact ───────────
+    if skipped:
         parts.append(_section("Skipped / Low Relevance"))
+        # Group by reason to avoid repeating "score below threshold 35" on every line
+        from collections import defaultdict
+        by_reason: dict[str, list[str]] = defaultdict(list)
+        for s in skipped:
+            reason = (s.get("reason") or "other").split(":")[0].strip()
+            hl = s.get("headline_en") or "—"
+            by_reason[reason].append(hl)
         parts.append(
-            f'<div style="font-family:{_F};font-size:12px;color:#8c959f;'
+            f'<div style="font-family:{_F};font-size:12px;color:#57606a;'
             f'padding:10px 14px;border:1px solid #30363d;border-radius:6px">'
         )
-        for s in skipped:
+        for reason, headlines in by_reason.items():
             parts.append(
-                f'<div style="margin:3px 0">— <em>{_esc(s.get("headline_en","—"))}</em>'
-                f' · {_esc(s.get("reason",""))}</div>'
+                f'<div style="margin-bottom:8px">'
+                f'<div style="color:#8c959f;margin-bottom:3px">{_esc(reason)}</div>'
             )
+            for hl in headlines:
+                parts.append(f'<div style="margin:2px 0 2px 10px">&ndash; {_esc(hl)}</div>')
+            parts.append("</div>")
         parts.append("</div>")
 
+    # ── Footer disclaimer ─────────────────────────────────────────────
+    parts.append(_FOOTER.format(F=_F))
     parts.append('</div>')
     return "".join(parts)
 
