@@ -3,9 +3,12 @@
 Simple pipeline — no AI, no scoring:
   1. Parse RSS, keep articles published in the last LOOKBACK_HOURS hours.
   2. Login to vz.lt with Playwright (images/fonts allowed — looks like a real browser).
-  3. Send one email with every article as a self-contained .html file, named
+  3. For each article: scroll to trigger lazy images, promote data-src → src,
+     then run trafilatura with output_format="html" and include_images=True
+     so the resulting body keeps images at their original positions inline
+     with paragraphs (not lumped at the bottom).
+  4. Send one email with every article as a self-contained .html file, named
      {section}_{index:02d}_{title_slug}.html (index resets per section).
-     Opening the file in a browser shows the full article with images.
 """
 from __future__ import annotations
 
@@ -146,11 +149,18 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
             try:
                 page.goto(item["url"], wait_until="domcontentloaded",
                           timeout=ARTICLE_TIMEOUT_MS)
+                # Trigger lazy-loaded images by scrolling to bottom.
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(800)
                 raw_html = page.content()
+
+                # VŽ lazy-loads images: real URL is in data-src, src holds a
+                # placeholder. Promote data-src → src so trafilatura keeps it.
+                fixed_html = _promote_lazy_src(raw_html)
+
+                # Plain text extraction — used only for length / paywall gates.
                 text = trafilatura.extract(
-                    raw_html,
-                    include_links=False,
-                    include_tables=True,
+                    fixed_html, include_links=False, include_tables=True,
                     favor_recall=True,
                 ) or ""
                 if len(text) < 200:
@@ -159,10 +169,22 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                 if any(m in text for m in PAYWALL_MARKERS):
                     print(f"  skip (paywall): {item['url']}")
                     continue
-                item["body"] = text
-                item["images"] = _extract_images(raw_html)
+
+                # Structured extraction with images inline at original positions.
+                body_html = trafilatura.extract(
+                    fixed_html, output_format="html",
+                    include_links=False, include_images=True,
+                    include_tables=True, favor_recall=True,
+                ) or ""
+                body_html = _clean_body_html(body_html)
+                if not body_html:
+                    print(f"  skip (no html body): {item['url']}")
+                    continue
+
+                item["body_html"] = body_html
                 out.append(item)
-                print(f"  ok ({len(text)} chars, {len(item['images'])} images): {item['url']}")
+                n_imgs = body_html.count("<img")
+                print(f"  ok ({len(text)} chars, {n_imgs} images): {item['url']}")
             except PWTimeout:
                 print(f"  timeout: {item['url']}")
             except Exception as e:
@@ -172,28 +194,40 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
     return out
 
 
-# ── Image extraction ──────────────────────────────────────────────────────────
-def _extract_images(raw_html: str) -> list[str]:
-    """Pull article image URLs from raw page HTML (lazy-load aware, deduped)."""
-    urls: list[str] = []
-    seen: set[str] = set()
-    for tag in re.finditer(r'<img[^>]+>', raw_html, re.IGNORECASE):
-        t = tag.group(0)
-        # Prefer data-src (lazy-loaded) over src
-        m = re.search(r'data-src=["\']([^"\']+)["\']', t) \
-            or re.search(r'\bsrc=["\']([^"\']+)["\']', t)
+# ── HTML cleanup helpers ──────────────────────────────────────────────────────
+_LAZY_IMG_RE = re.compile(r'(<img\b[^>]*?)\bsrc=(["\'])[^"\']*\2', re.IGNORECASE)
+
+def _promote_lazy_src(raw_html: str) -> str:
+    """Replace placeholder src with data-src content on <img> tags."""
+    def fix(tag: str) -> str:
+        m = re.search(r'data-src=(["\'])([^"\']+)\1', tag, re.IGNORECASE)
         if not m:
-            continue
-        url = m.group(1)
+            return tag
+        real = m.group(2)
+        return _LAZY_IMG_RE.sub(lambda mm: f'{mm.group(1)}src="{real}"', tag, count=1)
+    return re.sub(r'<img\b[^>]*>', lambda m: fix(m.group(0)), raw_html, flags=re.IGNORECASE)
+
+
+def _clean_body_html(body_html: str) -> str:
+    """Strip trafilatura's outer wrapper and unwanted attrs; drop tiny/icon images."""
+    # Strip outer <doc>/<main>/<body>/<html> wrappers if present.
+    body_html = re.sub(r'^\s*<(?:!DOCTYPE[^>]*>|html[^>]*>|body[^>]*>|main[^>]*>|doc[^>]*>)\s*',
+                       '', body_html, flags=re.IGNORECASE)
+    body_html = re.sub(r'\s*</(?:html|body|main|doc)>\s*$', '', body_html, flags=re.IGNORECASE)
+
+    # Drop images that are clearly not article content.
+    def filter_img(m: re.Match) -> str:
+        tag = m.group(0)
+        src = re.search(r'\bsrc=(["\'])([^"\']+)\1', tag)
+        if not src:
+            return ""
+        url = src.group(2)
         if not url.startswith("http"):
-            continue
-        # Skip tiny icons, SVGs, tracking pixels
+            return ""
         if any(x in url for x in (".svg", "1x1", "pixel", "tracking", "logo")):
-            continue
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
-    return urls[:12]  # cap at 12 images per article
+            return ""
+        return tag
+    return re.sub(r'<img\b[^>]*>', filter_img, body_html, flags=re.IGNORECASE)
 
 
 # ── HTML article renderer ─────────────────────────────────────────────────────
@@ -201,35 +235,29 @@ _ARTICLE_CSS = """
   body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:720px;
        margin:40px auto;padding:0 24px;color:#24292f;line-height:1.7;font-size:16px}
   h1{font-size:26px;line-height:1.3;margin:0 0 10px}
+  h2,h3{line-height:1.3;margin:28px 0 10px}
   .meta{font-size:13px;color:#57606a;margin-bottom:28px;padding-bottom:14px;
         border-bottom:1px solid #d0d7de}
   .meta a{color:#0969da;text-decoration:none}
-  img{max-width:100%;height:auto;margin:20px 0;border-radius:6px;display:block}
+  .article-body img,figure img{max-width:100%;height:auto;margin:20px 0;
+       border-radius:6px;display:block}
+  figure{margin:24px 0}
+  figcaption{font-size:13px;color:#57606a;margin-top:6px;font-style:italic}
+  blockquote{border-left:3px solid #d0d7de;margin:18px 0;padding:6px 16px;
+       color:#444c56}
+  ul,ol{margin:0 0 18px 22px}
   p{margin:0 0 18px}
   .footer{margin-top:40px;padding-top:14px;border-top:1px solid #d0d7de;
           font-size:12px;color:#57606a}
 """
 
 def _render_article_html(a: dict) -> str:
-    """Build a self-contained HTML page for one article."""
-    label    = html_mod.escape(SECTION_LABELS.get(a["section"], a["section"]))
-    title    = html_mod.escape(a["title"])
-    url      = html_mod.escape(a["url"])
-    pub      = a["published"].strftime("%Y-%m-%d %H:%M UTC")
-
-    # First image as hero, rest appended at the bottom
-    images   = a.get("images") or []
-    hero     = f'<img src="{html_mod.escape(images[0])}" alt="">' if images else ""
-    extra_imgs = "".join(
-        f'<img src="{html_mod.escape(u)}" alt="">' for u in images[1:]
-    )
-
-    # Body: split on double-newlines → paragraphs
-    paras = "\n".join(
-        f"<p>{html_mod.escape(p.strip())}</p>"
-        for p in re.split(r"\n{2,}", a["body"].strip())
-        if p.strip()
-    )
+    """Build a self-contained HTML page for one article (images inline)."""
+    label = html_mod.escape(SECTION_LABELS.get(a["section"], a["section"]))
+    title = html_mod.escape(a["title"])
+    url   = html_mod.escape(a["url"])
+    pub   = a["published"].strftime("%Y-%m-%d %H:%M UTC")
+    body  = a["body_html"]  # already-trusted HTML from trafilatura
 
     return f"""<!DOCTYPE html>
 <html lang="lt">
@@ -245,9 +273,9 @@ def _render_article_html(a: dict) -> str:
     {label} &nbsp;&middot;&nbsp; {pub}
     &nbsp;&middot;&nbsp; <a href="{url}">source</a>
   </div>
-  {hero}
-  {paras}
-  {extra_imgs}
+  <div class="article-body">
+  {body}
+  </div>
   <div class="footer">Source: <a href="{url}">{url}</a></div>
 </body>
 </html>"""
