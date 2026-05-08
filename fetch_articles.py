@@ -176,6 +176,15 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                 # the outerHTML we extract has real URLs.
                 page.evaluate(_PROMOTE_LAZY_JS)
 
+                # Inline every <img> as a base64 data URL so the email
+                # attachment renders without any network fetches (iOS Mail /
+                # Gmail iOS block remote images in HTML attachments).
+                try:
+                    img_stats = page.evaluate(_INLINE_IMAGES_JS)
+                    print(f"    images inlined: {img_stats}")
+                except Exception as e:
+                    print(f"    image inlining failed: {e}")
+
                 # Pull the article container's outerHTML straight from DOM —
                 # preserves the original structure, image positions, headings.
                 body_html = page.evaluate(_EXTRACT_BODY_JS)
@@ -280,6 +289,39 @@ _PROMOTE_LAZY_JS = """
     const real = img.getAttribute('data-src');
     if (real) img.setAttribute('src', real);
   });
+}
+"""
+
+# Fetch every <img src="http..."> in the page via the browser's own session
+# (cookies, referer match origin) and rewrite it to a base64 data: URL.
+# This makes the resulting HTML attachment fully self-contained, so it
+# renders on iOS Mail / Gmail iOS where remote images are blocked.
+_INLINE_IMAGES_JS = """
+async () => {
+  const MAX_BYTES = 1_500_000;  // skip any single image > 1.5 MB
+  const imgs = Array.from(document.querySelectorAll('img'));
+  let ok = 0, skipped = 0, failed = 0;
+  for (const img of imgs) {
+    const src = img.getAttribute('src');
+    if (!src) { skipped++; continue; }
+    if (src.startsWith('data:')) { ok++; continue; }
+    try {
+      const r = await fetch(src, {credentials: 'include'});
+      if (!r.ok) { failed++; continue; }
+      const blob = await r.blob();
+      if (blob.size > MAX_BYTES) { skipped++; continue; }
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(blob);
+      });
+      img.setAttribute('src', b64);
+      img.removeAttribute('srcset');
+      ok++;
+    } catch (e) { failed++; }
+  }
+  return {ok, skipped, failed, total: imgs.length};
 }
 """
 
