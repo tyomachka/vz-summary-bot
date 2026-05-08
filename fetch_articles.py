@@ -216,6 +216,15 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                     print(f"  skip (no html body): {item['url']}")
                     continue
 
+                # Server-side fallback for any remote <img src> the
+                # in-browser fetch() couldn't inline (cross-origin CDN
+                # images where CORS blocked the response body).
+                body_html, srv_stats = _inline_remote_images_serverside(
+                    body_html, ctx.request,
+                )
+                if srv_stats["ok"] or srv_stats["failed"]:
+                    print(f"    server-side inlined: {srv_stats}")
+
                 item["body_html"] = body_html
                 out.append(item)
                 n_imgs = body_html.count("<img")
@@ -270,8 +279,17 @@ _EXTRACT_BODY_JS = """
     '[class*="author"], [class*="byline"], [class*="journalist"], ' +
     '[class*="redaktor"], [class*="autorius"], ' +
     '[itemprop="author"], [rel="author"], ' +
+    '[class*="story__bottom"], [class*="story-bottom"], ' +
+    '[class*="article-footer"], [class*="article__footer"], ' +
+    '[class*="story-footer"], [class*="story__footer"], ' +
+    '[class*="io-article-footer"], ' +
     '.vz-recommendations, .vz-paywall'
   ).forEach(n => n.remove());
+
+  // Drop the article's <h1> title — we already render it in the page header,
+  // so leaving it inside the body shows the title twice.
+  const h1 = clone.querySelector('h1');
+  if (h1) h1.remove();
 
   // 2. Drop a top-of-body breadcrumb list (short OL/UL of all-links).
   const firstChildList = clone.querySelector(':scope > ol, :scope > ul, :scope > div > ol, :scope > div > ul');
@@ -598,6 +616,46 @@ def _promote_lazy_src(raw_html: str) -> str:
         real = m.group(2)
         return _LAZY_IMG_RE.sub(lambda mm: f'{mm.group(1)}src="{real}"', tag, count=1)
     return re.sub(r'<img\b[^>]*>', lambda m: fix(m.group(0)), raw_html, flags=re.IGNORECASE)
+
+
+_REMOTE_IMG_RE = re.compile(
+    r'(<img\b[^>]*?\bsrc=)(["\'])(https?:[^"\']+)\2([^>]*>)',
+    re.IGNORECASE,
+)
+
+def _inline_remote_images_serverside(body_html: str, request_ctx) -> tuple[str, dict]:
+    """Fetch any remaining http(s) <img src> via Playwright's APIRequestContext
+    (bypasses browser CORS) and rewrite to base64 data URL. Used as a
+    fallback after the in-browser inliner — catches cross-origin CDN images
+    where fetch() with credentials fails."""
+    stats = {"ok": 0, "skipped": 0, "failed": 0}
+    cache: dict[str, str] = {}
+
+    def replace(m: re.Match) -> str:
+        prefix, quote, url, suffix = m.group(1), m.group(2), m.group(3), m.group(4)
+        if url in cache:
+            stats["ok"] += 1
+            return f'{prefix}{quote}{cache[url]}{quote}{suffix}'
+        try:
+            resp = request_ctx.get(url, timeout=15_000)
+            if not resp.ok:
+                stats["failed"] += 1
+                return m.group(0)
+            body = resp.body()
+            if len(body) > 1_500_000:
+                stats["skipped"] += 1
+                return m.group(0)
+            mime = (resp.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+            data_url = f"data:{mime};base64,{base64.b64encode(body).decode('ascii')}"
+            cache[url] = data_url
+            stats["ok"] += 1
+            return f'{prefix}{quote}{data_url}{quote}{suffix}'
+        except Exception:
+            stats["failed"] += 1
+            return m.group(0)
+
+    new_html = _REMOTE_IMG_RE.sub(replace, body_html)
+    return new_html, stats
 
 
 def _clean_body_html(body_html: str) -> str:
