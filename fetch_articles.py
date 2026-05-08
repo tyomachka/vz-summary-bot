@@ -37,7 +37,7 @@ LOOKBACK_HOURS       = 26          # how far back to look for articles
 MAX_ARTICLES         = 60          # hard cap on articles fetched per run
 ARTICLE_TIMEOUT_MS   = 30_000
 
-SKIP_SECTIONS = {"laisvalaikis", "verslo-klase"}  # lifestyle / luxury — skip
+SKIP_SECTIONS = {"laisvalaikis", "verslo-klase", "verslo-tribuna"}  # lifestyle / luxury / sponsored — skip
 
 PAYWALL_MARKERS = ("Žinios, vertos jūsų laiko", "Tapkite prenumeratoriumi")
 
@@ -177,7 +177,9 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                     continue
 
                 # Replace JS-rendered widgets (charts, tables) with PNG
-                # screenshots so they survive in static HTML.
+                # screenshots so they survive in static HTML. Kill any
+                # overlay first so it doesn't get captured in the screenshot.
+                _kill_overlays(page)
                 n_widgets = _inline_widgets_as_screenshots(page)
 
                 # Promote lazy <img data-src> to src in the live DOM, so
@@ -393,16 +395,62 @@ def _dismiss_consent_banner(page) -> None:
                 return
         except Exception:
             continue
-    # As a fallback, try to forcibly hide any fixed-position overlays.
+    # As a fallback, forcibly hide overlays even if no button matched.
+    _kill_overlays(page)
+
+
+_KILL_OVERLAYS_JS = """
+() => {
+  // 1. Known CMP / consent vendor classes & ids (Sourcepoint, OneTrust,
+  //    Didomi, Quantcast, etc.).
+  const vendorSelectors = [
+    '[class*="consent"]', '[class*="cookie"]', '[class*="gdpr"]',
+    '[id*="consent"]', '[id*="cookie"]', '[id*="gdpr"]',
+    '[class*="privacy-banner"]', '[class*="privacy_banner"]',
+    '[class*="sp_message"]', '[class*="sp-message"]', '[id*="sp_message"]',
+    '[class*="sourcepoint"]', '[id*="sourcepoint"]',
+    '[class*="onetrust"]', '[id*="onetrust"]',
+    '[class*="didomi"]', '[id*="didomi"]',
+    '[class*="qc-cmp"]', '[id*="qc-cmp"]',
+    '[class*="cmp-"]', '[id*="cmp-"]',
+    'iframe[src*="consent"]', 'iframe[src*="cmp"]',
+    'iframe[src*="sourcepoint"]', 'iframe[src*="privacy"]',
+  ];
+  document.querySelectorAll(vendorSelectors.join(', ')).forEach(el => {
+    el.style.setProperty('display', 'none', 'important');
+  });
+
+  // 2. Heuristic: any high-z-index fixed/sticky element whose text reads
+  //    like a Lithuanian/English consent dialog.
+  const consentWords = [
+    'partneri', 'sutinku', 'sutikim', 'slapuk', 'privatum',
+    'duomen', 'cookie', 'consent', 'priimti', 'patvirtinti',
+  ];
+  Array.from(document.querySelectorAll('body *')).forEach(el => {
+    let cs;
+    try { cs = getComputedStyle(el); } catch (e) { return; }
+    if (cs.position !== 'fixed' && cs.position !== 'sticky') return;
+    const z = parseInt(cs.zIndex || '0', 10);
+    if (isNaN(z) || z < 100) return;
+    const txt = (el.textContent || '').toLowerCase().slice(0, 500);
+    if (consentWords.some(w => txt.includes(w))) {
+      el.style.setProperty('display', 'none', 'important');
+    }
+  });
+
+  // 3. Sometimes the page is locked with overflow:hidden + a backdrop —
+  //    restore scrolling so screenshots aren't pinned to the top.
+  document.documentElement.style.overflow = '';
+  document.body.style.overflow = '';
+}
+"""
+
+
+def _kill_overlays(page) -> None:
+    """Forcibly hide any fixed-position consent / cookie overlay so it
+    doesn't appear on top of widget screenshots."""
     try:
-        page.evaluate("""
-          () => {
-            document.querySelectorAll(
-              '[class*="consent"], [class*="cookie"], [id*="consent"], ' +
-              '[id*="cookie"], [class*="gdpr"], [class*="privacy-banner"]'
-            ).forEach(el => { el.style.display = 'none'; });
-          }
-        """)
+        page.evaluate(_KILL_OVERLAYS_JS)
     except Exception:
         pass
 
