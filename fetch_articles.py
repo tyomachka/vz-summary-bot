@@ -227,14 +227,49 @@ _EXTRACT_BODY_JS = """
   for (const s of sels) { el = document.querySelector(s); if (el) break; }
   if (!el) return null;
   const clone = el.cloneNode(true);
-  // Strip non-content elements.
+
+  // 1. Strip non-content elements by selector.
   clone.querySelectorAll(
     'script, style, noscript, iframe, ' +
+    'nav, header, footer, aside, button, [role="button"], ' +
     '[class*="banner"], [class*="advert"], [class*="-ad"], [class*="ad-"], ' +
-    '[id*="banner"], [id*="advert"], [class*="related"], [class*="newsletter"], ' +
+    '[id*="banner"], [id*="advert"], ' +
+    '[class*="breadcrumb"], [class*="crumb"], ' +
+    '[class*="player"], [class*="audio"], [class*="tts"], [class*="listen"], ' +
+    '[class*="speech"], [class*="speaker"], ' +
+    '[class*="reading-time"], [class*="reading_time"], [class*="readtime"], ' +
+    '[class*="next-article"], [class*="prev-article"], [class*="prev-next"], ' +
+    '[class*="pagination"], [class*="navigation"], [class*="article-nav"], ' +
+    '[class*="info-tooltip"], [class*="info-icon"], [class*="tooltip"], ' +
+    '[class*="related"], [class*="recommend"], [class*="newsletter"], ' +
     '[class*="subscribe"], [class*="share"], [class*="comment"], ' +
-    'aside, footer, nav, .vz-recommendations, .vz-paywall'
+    '[class*="social"], [class*="bookmark"], ' +
+    '.vz-recommendations, .vz-paywall'
   ).forEach(n => n.remove());
+
+  // 2. Drop a top-of-body breadcrumb list (short OL/UL of all-links).
+  const firstChildList = clone.querySelector(':scope > ol, :scope > ul, :scope > div > ol, :scope > div > ul');
+  if (firstChildList && firstChildList.children.length <= 5) {
+    const items = firstChildList.querySelectorAll('li');
+    const allShortLinks = Array.from(items).every(li => {
+      const t = (li.textContent || '').trim();
+      return li.querySelector('a') && t.length < 40;
+    });
+    if (allShortLinks) firstChildList.remove();
+  }
+
+  // 3. Drop elements whose visible text is a known toolbar phrase.
+  const toolbarTexts = new Set([
+    'Klausyti', 'Stabdyti', 'Suskleisti',
+    'Klausyti Stabdyti Suskleisti',
+    'Pagrindinis', 'Pagrindinis Automobiliai',
+    'Skaityti', 'Spausdinti',
+  ]);
+  clone.querySelectorAll('div, span, section, p').forEach(node => {
+    const t = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (toolbarTexts.has(t) && node.children.length <= 4) node.remove();
+  });
+
   return clone.outerHTML;
 }
 """ % str(_BODY_SELECTORS)
