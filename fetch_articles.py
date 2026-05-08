@@ -146,10 +146,18 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
         if "Atsijungti" not in page.content():
             raise RuntimeError("Login failed: 'Atsijungti' not found on homepage.")
 
+        # Dismiss the cookie / data-consent banner so it doesn't overlay
+        # chart widgets when we screenshot them.
+        _dismiss_consent_banner(page)
+
         for item in items:
             try:
                 page.goto(item["url"], wait_until="domcontentloaded",
                           timeout=ARTICLE_TIMEOUT_MS)
+
+                # Cookie banner can re-appear on new pageloads even after
+                # accepting once — dismiss again per page just in case.
+                _dismiss_consent_banner(page)
 
                 # Scroll in steps so lazy images and JS-rendered widgets
                 # (charts, tables) actually mount before we capture the DOM.
@@ -267,16 +275,31 @@ _EXTRACT_BODY_JS = """
     if (allShortLinks) firstChildList.remove();
   }
 
-  // 3. Drop elements whose visible text is a known toolbar phrase.
+  // 3. Drop elements whose visible text is a known toolbar phrase
+  //    or a reading-time indicator like "5 min." / "10 min".
   const toolbarTexts = new Set([
     'Klausyti', 'Stabdyti', 'Suskleisti',
     'Klausyti Stabdyti Suskleisti',
     'Pagrindinis', 'Pagrindinis Automobiliai',
     'Skaityti', 'Spausdinti',
   ]);
-  clone.querySelectorAll('div, span, section, p').forEach(node => {
+  const readingTimeRe = /^\\d{1,3}\\s*min\\.?$/;
+  clone.querySelectorAll('div, span, section, p, figure').forEach(node => {
     const t = (node.textContent || '').replace(/\\s+/g, ' ').trim();
-    if (toolbarTexts.has(t) && node.children.length <= 4) node.remove();
+    if (!t) return;
+    if (toolbarTexts.has(t) && node.children.length <= 4) {
+      node.remove(); return;
+    }
+    if (readingTimeRe.test(t) && node.children.length <= 6) {
+      node.remove(); return;
+    }
+  });
+
+  // 4. Drop standalone <svg> icons left over after toolbar removal,
+  //    plus tiny icon-only <i> tags.
+  clone.querySelectorAll('svg').forEach(s => {
+    const parentText = (s.parentElement?.textContent || '').trim();
+    if (parentText.length < 12) s.remove();
   });
 
   return clone.outerHTML;
@@ -299,12 +322,27 @@ _PROMOTE_LAZY_JS = """
 _INLINE_IMAGES_JS = """
 async () => {
   const MAX_BYTES = 1_500_000;  // skip any single image > 1.5 MB
+  // Strip <source> tags inside <picture> — they hold srcset URLs the
+  // browser may pick first. After this, only the inner <img> remains,
+  // which we'll inline below.
+  document.querySelectorAll('picture source').forEach(s => s.remove());
+  // Also strip srcset on <img> so the browser can't pick a remote URL.
+  document.querySelectorAll('img[srcset]').forEach(i => i.removeAttribute('srcset'));
+
   const imgs = Array.from(document.querySelectorAll('img'));
   let ok = 0, skipped = 0, failed = 0;
   for (const img of imgs) {
-    const src = img.getAttribute('src');
+    let src = img.getAttribute('src');
+    if (!src) {
+      // Try data-src / data-original / data-lazy-src as fallbacks.
+      src = img.getAttribute('data-src')
+         || img.getAttribute('data-original')
+         || img.getAttribute('data-lazy-src');
+      if (src) img.setAttribute('src', src);
+    }
     if (!src) { skipped++; continue; }
     if (src.startsWith('data:')) { ok++; continue; }
+    if (src.startsWith('//')) src = 'https:' + src;
     try {
       const r = await fetch(src, {credentials: 'include'});
       if (!r.ok) { failed++; continue; }
@@ -324,6 +362,50 @@ async () => {
   return {ok, skipped, failed, total: imgs.length};
 }
 """
+
+def _dismiss_consent_banner(page) -> None:
+    """Click through VŽ's cookie / data-consent dialog. The banner overlays
+    the page until dismissed, including chart widgets we screenshot."""
+    # Try a series of likely "accept" button selectors. Order matters —
+    # buttons with explicit Lithuanian consent text first.
+    selectors = [
+        "button:has-text('Sutinku su visais')",
+        "button:has-text('Sutinku')",
+        "button:has-text('Priimti viską')",
+        "button:has-text('Priimti visus')",
+        "button:has-text('Priimti')",
+        "button:has-text('Patvirtinti')",
+        "button:has-text('Accept all')",
+        "button:has-text('Accept')",
+        "[id*='consent'] button",
+        "[class*='consent'] button[class*='accept']",
+        "[class*='cookie'] button[class*='accept']",
+        "button[aria-label*='Sutinku']",
+        "button[aria-label*='Accept']",
+    ]
+    for sel in selectors:
+        try:
+            btn = page.query_selector(sel)
+            if btn and btn.is_visible():
+                btn.click(timeout=2000)
+                page.wait_for_timeout(400)
+                print(f"    consent banner dismissed via: {sel}")
+                return
+        except Exception:
+            continue
+    # As a fallback, try to forcibly hide any fixed-position overlays.
+    try:
+        page.evaluate("""
+          () => {
+            document.querySelectorAll(
+              '[class*="consent"], [class*="cookie"], [id*="consent"], ' +
+              '[id*="cookie"], [class*="gdpr"], [class*="privacy-banner"]'
+            ).forEach(el => { el.style.display = 'none'; });
+          }
+        """)
+    except Exception:
+        pass
+
 
 def _scroll_through(page) -> None:
     """Scroll top→bottom in chunks so lazy content (images + widgets) mounts."""
