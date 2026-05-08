@@ -25,10 +25,11 @@ jobs:
 
       - name: Fetch and email articles
         env:
-          VZ_EMAIL:      ${{ secrets.VZ_EMAIL }}
-          VZ_PASSWORD:   ${{ secrets.VZ_PASSWORD }}
-          SMTP_USER:     ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          SMTP_TO:       ${{ secrets.SMTP_TO }}
+          VZ_EMAIL:        ${{ secrets.VZ_EMAIL }}
+          VZ_PASSWORD:     ${{ secrets.VZ_PASSWORD }}
+          SMTP_USER:       ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:   ${{ secrets.SMTP_PASSWORD }}
+          SMTP_TO:         ${{ secrets.SMTP_TO }}
+          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
           PYTHONIOENCODING: utf-8
         run: python fetch_articles.py

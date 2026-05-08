@@ -24,13 +24,14 @@ If anything fails, you get a failure email with the Python traceback.
 
 Repo **Settings → Secrets and variables → Actions**:
 
-| Name            | Value                                            |
-| --------------- | ------------------------------------------------ |
-| `VZ_EMAIL`      | Your VŽ login email                              |
-| `VZ_PASSWORD`   | Your VŽ password                                 |
-| `SMTP_USER`     | Gmail address sending the email                  |
-| `SMTP_PASSWORD` | 16-char app password from step 1 (no spaces)     |
-| `SMTP_TO`       | Where articles arrive (defaults to `SMTP_USER`)  |
+| Name              | Value                                                       |
+| ----------------- | ----------------------------------------------------------- |
+| `VZ_EMAIL`        | Your VŽ login email                                         |
+| `VZ_PASSWORD`     | Your VŽ password                                            |
+| `SMTP_USER`       | Gmail address sending the email                             |
+| `SMTP_PASSWORD`   | 16-char app password from step 1 (no spaces)                |
+| `SMTP_TO`         | Where articles arrive (defaults to `SMTP_USER`)             |
+| `GEMINI_API_KEY`  | Optional. Google AI Studio key — enables the Investing brief at top of digest. Without it, the digest builds without that section. |
 
 ### 3. First run
 
