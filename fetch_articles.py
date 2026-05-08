@@ -774,7 +774,7 @@ _DIGEST_CSS = """
   .cat-nav a:hover{background:#eaeef2}
   main.wrap{padding-top:24px;padding-bottom:24px}
   section.cat{padding:24px 0;border-top:1px solid #eaeef2;
-       scroll-margin-top:calc(80px + env(safe-area-inset-top,0px))}
+       scroll-margin-top:calc(96px + env(safe-area-inset-top,0px))}
   section.cat:first-of-type{border-top:none;padding-top:8px}
   section.cat > h2{font-size:20px;margin:0 0 12px;color:#24292f}
   section.cat .tier-badge{font-size:11px;color:#57606a;font-weight:normal;
@@ -784,7 +784,12 @@ _DIGEST_CSS = """
   ol.article-list a{color:#0969da;text-decoration:none}
   ol.article-list a:hover{text-decoration:underline}
   article.entry{padding:24px 0;border-top:1px dashed #eaeef2;
-       scroll-margin-top:calc(80px + env(safe-area-inset-top,0px))}
+       scroll-margin-top:calc(96px + env(safe-area-inset-top,0px))}
+  /* When the nav is open the header is much taller — bump scroll-margin
+     so titles still land just below it (uses :has(), modern Safari/iOS). */
+  body:has(details.cat-toggle[open]) section.cat,
+  body:has(details.cat-toggle[open]) article.entry{
+       scroll-margin-top:calc(280px + env(safe-area-inset-top,0px))}
   article.entry > h3{font-size:19px;line-height:1.35;margin:0 0 6px;color:#24292f}
   article.entry .meta{font-size:13px;color:#57606a;margin-bottom:18px}
   article.entry .meta a{color:#0969da;text-decoration:none}
