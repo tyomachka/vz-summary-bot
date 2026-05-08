@@ -752,7 +752,9 @@ _DIGEST_CSS = """
        background:#fff}
   .wrap{max-width:760px;margin:0 auto;padding:0 20px}
   .digest-header{background:#fff;border-bottom:1px solid #d0d7de;
-       padding:14px 0 6px}
+       padding:calc(14px + env(safe-area-inset-top,0px)) 0 6px;
+       position:sticky;top:0;z-index:50;
+       box-shadow:0 1px 4px rgba(0,0,0,0.04)}
   .digest-header h1{margin:0 0 4px;font-size:20px;color:#24292f}
   .digest-header .sub{font-size:12px;color:#57606a;margin-bottom:6px}
   details.cat-toggle{margin:0;padding:0}
@@ -772,7 +774,7 @@ _DIGEST_CSS = """
   .cat-nav a:hover{background:#eaeef2}
   main.wrap{padding-top:24px;padding-bottom:24px}
   section.cat{padding:24px 0;border-top:1px solid #eaeef2;
-       scroll-margin-top:12px}
+       scroll-margin-top:calc(80px + env(safe-area-inset-top,0px))}
   section.cat:first-of-type{border-top:none;padding-top:8px}
   section.cat > h2{font-size:20px;margin:0 0 12px;color:#24292f}
   section.cat .tier-badge{font-size:11px;color:#57606a;font-weight:normal;
@@ -782,7 +784,7 @@ _DIGEST_CSS = """
   ol.article-list a{color:#0969da;text-decoration:none}
   ol.article-list a:hover{text-decoration:underline}
   article.entry{padding:24px 0;border-top:1px dashed #eaeef2;
-       scroll-margin-top:12px}
+       scroll-margin-top:calc(80px + env(safe-area-inset-top,0px))}
   article.entry > h3{font-size:19px;line-height:1.35;margin:0 0 6px;color:#24292f}
   article.entry .meta{font-size:13px;color:#57606a;margin-bottom:18px}
   article.entry .meta a{color:#0969da;text-decoration:none}
@@ -798,7 +800,8 @@ _DIGEST_CSS = """
   article.entry .body p{margin:0 0 16px}
   article.entry .body h2,article.entry .body h3,article.entry .body h4{
        line-height:1.3;margin:22px 0 8px}
-  a.back-to-top-btn{position:fixed;right:18px;bottom:18px;z-index:60;
+  a.back-to-top-btn{position:fixed;right:18px;
+       bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:60;
        width:42px;height:42px;border-radius:50%;background:#24292f;
        color:#fff;text-decoration:none;display:flex;align-items:center;
        justify-content:center;font-size:20px;line-height:1;
@@ -878,7 +881,7 @@ def _render_combined_html(by_section: dict, today: dt.date,
 <html lang="lt">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>VŽ {today.isoformat()}</title>
   <style>{_DIGEST_CSS}</style>
 </head>
