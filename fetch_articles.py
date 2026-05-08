@@ -752,8 +752,7 @@ _DIGEST_CSS = """
        background:#fff}
   .wrap{max-width:760px;margin:0 auto;padding:0 20px}
   .digest-header{background:#fff;border-bottom:1px solid #d0d7de;
-       padding:14px 0 6px;position:sticky;top:0;z-index:50;
-       box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+       padding:14px 0 6px}
   .digest-header h1{margin:0 0 4px;font-size:20px;color:#24292f}
   .digest-header .sub{font-size:12px;color:#57606a;margin-bottom:6px}
   details.cat-toggle{margin:0;padding:0}
@@ -773,7 +772,7 @@ _DIGEST_CSS = """
   .cat-nav a:hover{background:#eaeef2}
   main.wrap{padding-top:24px;padding-bottom:24px}
   section.cat{padding:24px 0;border-top:1px solid #eaeef2;
-       scroll-margin-top:64px}
+       scroll-margin-top:12px}
   section.cat:first-of-type{border-top:none;padding-top:8px}
   section.cat > h2{font-size:20px;margin:0 0 12px;color:#24292f}
   section.cat .tier-badge{font-size:11px;color:#57606a;font-weight:normal;
@@ -783,7 +782,7 @@ _DIGEST_CSS = """
   ol.article-list a{color:#0969da;text-decoration:none}
   ol.article-list a:hover{text-decoration:underline}
   article.entry{padding:24px 0;border-top:1px dashed #eaeef2;
-       scroll-margin-top:64px}
+       scroll-margin-top:12px}
   article.entry > h3{font-size:19px;line-height:1.35;margin:0 0 6px;color:#24292f}
   article.entry .meta{font-size:13px;color:#57606a;margin-bottom:18px}
   article.entry .meta a{color:#0969da;text-decoration:none}
