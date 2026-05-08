@@ -304,6 +304,23 @@ _EXTRACT_BODY_JS = """
     if (parentText.length < 12) s.remove();
   });
 
+  // 5. Drop in-article 'Verslo Tribūna' / 'RĖMIMAS' promo blocks.
+  //    These are sponsored content cards embedded inside article bodies.
+  const promoMarkers = ['VERSLO TRIBŪNA', 'VERSLO TRIBUNA', 'RĖMIMAS', 'REMIMAS'];
+  clone.querySelectorAll('section, aside, div, figure').forEach(el => {
+    const heading = el.querySelector('h1, h2, h3, h4, h5, h6');
+    const headTxt = (heading?.textContent || '').trim().toUpperCase();
+    if (promoMarkers.some(m => headTxt === m || headTxt.startsWith(m))) {
+      el.remove(); return;
+    }
+    // Element with class signalling sponsored content.
+    const cls = (el.className || '').toString().toLowerCase();
+    if (cls.includes('tribuna') || cls.includes('remimas') ||
+        cls.includes('sponsor') || cls.includes('promo')) {
+      el.remove();
+    }
+  });
+
   return clone.outerHTML;
 }
 """ % str(_BODY_SELECTORS)
@@ -475,17 +492,36 @@ def _inline_widgets_as_screenshots(page) -> int:
     """Replace JS-rendered chart/table widgets with PNG <img> screenshots
     inlined as base64 data URLs, so they survive in the static HTML."""
     # Tag each widget with a unique id so we can find it after the DOM mutates.
+    # Includes Infogram iframe embeds (tables / data viz).
     n_tagged = page.evaluate("""
       () => {
-        const sel = 'figure.vz-widget, [x-vz-chart-data], div.vzwidget-vessel';
+        const sel = [
+          'figure.vz-widget',
+          '[x-vz-chart-data]',
+          'div.vzwidget-vessel',
+          'figure.infogram-embed',
+          'iframe.infogram',
+          'iframe[src*="infogram.com"]',
+          'iframe[src*="datawrapper"]',
+          'iframe[src*="flourish"]',
+        ].join(', ');
         const els = document.querySelectorAll(sel);
         let i = 0;
+        const result = [];
         els.forEach(el => {
-          if (!el.id || !el.id.startsWith('__vzw_')) {
-            el.id = '__vzw_' + (i++);
+          // For iframes, screenshot the wrapping figure if present (so we
+          // capture caption + sized container instead of a 0-height frame).
+          let target = el;
+          if (el.tagName === 'IFRAME') {
+            const fig = el.closest('figure');
+            if (fig) target = fig;
           }
+          if (!target.id || !target.id.startsWith('__vzw_')) {
+            target.id = '__vzw_' + (i++);
+          }
+          if (!result.includes(target.id)) result.push(target.id);
         });
-        return Array.from(els).map(el => el.id);
+        return result;
       }
     """)
     if not n_tagged:
