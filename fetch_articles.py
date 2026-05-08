@@ -1,14 +1,18 @@
-"""Fetch VŽ articles and email them as .html attachments.
+"""Fetch VŽ articles and email them as a single combined HTML digest.
 
-Simple pipeline — no AI, no scoring:
-  1. Parse RSS, keep articles published in the last LOOKBACK_HOURS hours.
-  2. Login to vz.lt with Playwright (images/fonts allowed — looks like a real browser).
-  3. For each article: scroll to trigger lazy images, promote data-src → src,
-     then run trafilatura with output_format="html" and include_images=True
-     so the resulting body keeps images at their original positions inline
-     with paragraphs (not lumped at the bottom).
-  4. Send one email with every article as a self-contained .html file, named
-     {section}_{index:02d}_{title_slug}.html (index resets per section).
+Pipeline:
+  1. Parse RSS for the last LOOKBACK_HOURS. Only PRIMARY_SECTIONS and
+     SECONDARY_SECTIONS are considered. Secondary sections are pre-filtered
+     by INVEST_KEYWORDS_RE on the title.
+  2. Login to vz.lt (Playwright). For each article: dismiss CMP overlay,
+     scroll, screenshot chart/table widgets as PNG, inline all <img> as
+     base64 data URLs (so the file is self-contained on iOS).
+  3. Re-check secondary articles against INVEST_KEYWORDS_RE on the body
+     text — drop if no match. Primary articles are kept regardless.
+  4. Render one combined HTML digest with a sticky category nav: click a
+     category → jump to its article list → click a title → jump to that
+     article's body. Email it as a single attachment 'vz-{date}.html'
+     plus a small pipeline-log.html for diagnostics.
 """
 from __future__ import annotations
 
@@ -38,6 +42,33 @@ MAX_ARTICLES         = 60          # hard cap on articles fetched per run
 ARTICLE_TIMEOUT_MS   = 30_000
 
 SKIP_SECTIONS = {"laisvalaikis", "verslo-klase", "verslo-tribuna"}  # lifestyle / luxury / sponsored — skip
+
+# Primary categories: always included, no keyword filter.
+PRIMARY_SECTIONS = [
+    "verslo-aplinka", "finansai", "vadyba", "rinkos",
+    "izvalgos", "inovacijos", "dirbtinis-intelektas", "statyba-ir-nt",
+]
+# Secondary categories: included only when the article looks
+# investing-relevant (keyword filter on title and body).
+SECONDARY_SECTIONS = [
+    "logistika", "pramone", "energetika", "prekyba",
+    "mano-verslas", "financial-times", "mano-pinigai",
+]
+# Anything not in primary/secondary is dropped (in addition to SKIP_SECTIONS).
+PRIMARY_SET   = set(PRIMARY_SECTIONS)
+SECONDARY_SET = set(SECONDARY_SECTIONS)
+ALLOWED_SET   = PRIMARY_SET | SECONDARY_SET
+
+# Keyword filter for secondary articles. Matches Lithuanian and English
+# investing terms (case-insensitive, partial-stem so 'investicij*' covers
+# investicija/investicijų/investuotojai etc.).
+INVEST_KEYWORDS_RE = re.compile(
+    r"(investic|investuo|akcij|obligac|fond|milijon|mln\.|mlrd|"
+    r"\bEUR\b|dividend|bir[žz]oj|pelno|pelnin|kapital|pal[ūu]kan|"
+    r"vertybin|\bIPO\b|emisij|akcinink|prekyb[au] bir[žz]|"
+    r"bond|stock|equity|yield)",
+    re.IGNORECASE,
+)
 
 PAYWALL_MARKERS = ("Žinios, vertos jūsų laiko", "Tapkite prenumeratoriumi")
 
@@ -90,8 +121,15 @@ def fetch_rss(since: dt.datetime) -> tuple[list[dict], dict]:
         "bozo": bool(feed.get("bozo")),
         "bozo_exc": str(feed.get("bozo_exception", "")),
         "no_date": 0, "too_old": 0, "skipped_section": 0,
+        "secondary_no_kw_title": 0,
         "newest": None,
     }
+    # Section ordering: primary first (in PRIMARY_SECTIONS order), then
+    # secondary (in SECONDARY_SECTIONS order).
+    section_rank = {s: i for i, s in enumerate(
+        PRIMARY_SECTIONS + SECONDARY_SECTIONS
+    )}
+
     items = []
     for entry in feed.entries:
         if not getattr(entry, "published_parsed", None):
@@ -104,16 +142,26 @@ def fetch_rss(since: dt.datetime) -> tuple[list[dict], dict]:
             diag["too_old"] += 1
             continue
         section = _url_section(entry.link)
-        if section in SKIP_SECTIONS:
+        if section in SKIP_SECTIONS or section not in ALLOWED_SET:
             diag["skipped_section"] += 1
+            continue
+        tier = "primary" if section in PRIMARY_SET else "secondary"
+        # Title-level keyword pre-filter for secondary tier.
+        if tier == "secondary" and not INVEST_KEYWORDS_RE.search(entry.title or ""):
+            diag["secondary_no_kw_title"] += 1
             continue
         items.append({
             "title":   entry.title,
             "url":     entry.link,
             "section": section,
+            "tier":    tier,
             "published": pub,
         })
-    items.sort(key=lambda x: (x["section"], x["published"]))
+    # Primary first, then secondary. Within a section, newest first.
+    items.sort(key=lambda x: (
+        section_rank.get(x["section"], 999),
+        -x["published"].timestamp(),
+    ))
     return items[:MAX_ARTICLES], diag
 
 
@@ -178,6 +226,14 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                 if any(m in text for m in PAYWALL_MARKERS):
                     print(f"  skip (paywall): {item['url']}")
                     continue
+
+                # Secondary tier: re-check the body. Title may have been
+                # vague but body could mention investing terms — and vice
+                # versa, body may confirm there's nothing investing-related.
+                if item.get("tier") == "secondary":
+                    if not INVEST_KEYWORDS_RE.search(text):
+                        print(f"  skip (secondary, no kw in body): {item['url']}")
+                        continue
 
                 # Replace JS-rendered widgets (charts, tables) with PNG
                 # screenshots so they survive in static HTML. Kill any
@@ -540,6 +596,9 @@ def _inline_widgets_as_screenshots(page) -> int:
           'iframe[src*="infogram.com"]',
           'iframe[src*="datawrapper"]',
           'iframe[src*="flourish"]',
+          '[class*="lukas-investments"]',
+          '.lukas-investments-chart--summary',
+          '.lukas-investments-table',
         ].join(', ');
         const els = document.querySelectorAll(sel);
         let i = 0;
@@ -684,73 +743,165 @@ def _clean_body_html(body_html: str) -> str:
     return re.sub(r'<img\b[^>]*>', filter_img, body_html, flags=re.IGNORECASE)
 
 
-# ── HTML article renderer ─────────────────────────────────────────────────────
-_ARTICLE_CSS = """
-  body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:720px;
-       margin:40px auto;padding:0 24px;color:#24292f;line-height:1.7;font-size:16px}
-  h1{font-size:26px;line-height:1.3;margin:0 0 10px}
-  h2,h3{line-height:1.3;margin:28px 0 10px}
-  .meta{font-size:13px;color:#57606a;margin-bottom:28px;padding-bottom:14px;
-        border-bottom:1px solid #d0d7de}
-  .meta a{color:#0969da;text-decoration:none}
-  .article-body img,figure img{max-width:100%;height:auto;margin:20px 0;
-       border-radius:6px;display:block}
-  figure{margin:24px 0}
-  figcaption{font-size:13px;color:#57606a;margin-top:6px;font-style:italic}
-  blockquote{border-left:3px solid #d0d7de;margin:18px 0;padding:6px 16px;
-       color:#444c56}
-  ul,ol{margin:0 0 18px 22px}
-  p{margin:0 0 18px}
-  .footer{margin-top:40px;padding-top:14px;border-top:1px solid #d0d7de;
-          font-size:12px;color:#57606a}
+# ── HTML digest renderer ──────────────────────────────────────────────────────
+_DIGEST_CSS = """
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;
+       margin:0;padding:0;color:#24292f;line-height:1.7;font-size:16px;
+       background:#fff}
+  .wrap{max-width:760px;margin:0 auto;padding:0 20px}
+  .digest-header{background:#fff;border-bottom:1px solid #d0d7de;
+       padding:18px 0 8px;position:sticky;top:0;z-index:50;
+       box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+  .digest-header h1{margin:0 0 8px;font-size:22px;color:#24292f}
+  .digest-header .sub{font-size:13px;color:#57606a;margin-bottom:10px}
+  .cat-nav{display:flex;flex-wrap:wrap;gap:6px 8px;padding-bottom:8px}
+  .cat-nav a{display:inline-block;padding:5px 11px;border:1px solid #d0d7de;
+       border-radius:999px;font-size:13px;color:#0969da;text-decoration:none;
+       background:#f6f8fa;white-space:nowrap}
+  .cat-nav a.secondary{color:#57606a;background:#fff}
+  .cat-nav a:hover{background:#eaeef2}
+  section.cat{padding:32px 0 8px;border-top:1px solid #eaeef2;scroll-margin-top:90px}
+  section.cat > h2{font-size:20px;margin:0 0 12px;color:#24292f}
+  section.cat .tier-badge{font-size:11px;color:#57606a;font-weight:normal;
+       margin-left:8px;text-transform:uppercase;letter-spacing:0.5px}
+  ol.article-list{margin:0 0 24px;padding-left:24px}
+  ol.article-list li{margin:6px 0}
+  ol.article-list a{color:#0969da;text-decoration:none}
+  ol.article-list a:hover{text-decoration:underline}
+  article.entry{padding:24px 0;border-top:1px dashed #eaeef2;
+       scroll-margin-top:90px}
+  article.entry > h3{font-size:19px;line-height:1.35;margin:0 0 6px;color:#24292f}
+  article.entry .meta{font-size:13px;color:#57606a;margin-bottom:18px}
+  article.entry .meta a{color:#0969da;text-decoration:none}
+  article.entry .body{font-size:16px}
+  article.entry .body img,article.entry .body figure img{
+       max-width:100%;height:auto;margin:18px 0;border-radius:6px;display:block}
+  article.entry .body figure{margin:20px 0}
+  article.entry .body figcaption{font-size:13px;color:#57606a;
+       margin-top:6px;font-style:italic}
+  article.entry .body blockquote{border-left:3px solid #d0d7de;
+       margin:16px 0;padding:6px 16px;color:#444c56}
+  article.entry .body ul,article.entry .body ol{margin:0 0 16px 22px}
+  article.entry .body p{margin:0 0 16px}
+  article.entry .body h2,article.entry .body h3,article.entry .body h4{
+       line-height:1.3;margin:22px 0 8px}
+  .back-to-top{margin:18px 0 0;font-size:13px;text-align:right}
+  .back-to-top a{color:#57606a;text-decoration:none}
+  .digest-footer{margin:40px 0;padding:14px 0;border-top:1px solid #d0d7de;
+       font-size:12px;color:#57606a;text-align:center}
 """
 
-def _render_article_html(a: dict) -> str:
-    """Build a self-contained HTML page for one article (images inline)."""
-    label = html_mod.escape(SECTION_LABELS.get(a["section"], a["section"]))
-    title = html_mod.escape(a["title"])
-    url   = html_mod.escape(a["url"])
-    pub   = a["published"].strftime("%Y-%m-%d %H:%M UTC")
-    body  = a["body_html"]  # already-trusted HTML from trafilatura
+
+def _section_anchor(section: str) -> str:
+    return f"cat-{re.sub(r'[^a-z0-9-]', '', section.lower())}"
+
+
+def _article_anchor(section: str, idx: int) -> str:
+    return f"a-{re.sub(r'[^a-z0-9-]', '', section.lower())}-{idx:02d}"
+
+
+def _render_combined_html(by_section: dict, today: dt.date,
+                          counts: dict) -> str:
+    """One self-contained HTML page with sticky category nav and per-article
+    anchors. Articles already have inline base64 images in body_html."""
+    nav_links = []
+    sections_html = []
+
+    for section in PRIMARY_SECTIONS + SECONDARY_SECTIONS:
+        articles = by_section.get(section, [])
+        if not articles:
+            continue
+        label   = html_mod.escape(SECTION_LABELS.get(section, section))
+        anchor  = _section_anchor(section)
+        is_pri  = section in PRIMARY_SET
+        cls     = "" if is_pri else "secondary"
+        nav_links.append(
+            f'<a href="#{anchor}" class="{cls}">{label} ({len(articles)})</a>'
+        )
+
+        # List of titles
+        list_items = []
+        article_blocks = []
+        for idx, a in enumerate(articles, 1):
+            a_id    = _article_anchor(section, idx)
+            title_e = html_mod.escape(a["title"])
+            url_e   = html_mod.escape(a["url"])
+            pub     = a["published"].strftime("%Y-%m-%d %H:%M UTC")
+            body    = a["body_html"]
+            list_items.append(
+                f'<li><a href="#{a_id}">{title_e}</a></li>'
+            )
+            article_blocks.append(f"""
+        <article class="entry" id="{a_id}">
+          <h3>{title_e}</h3>
+          <div class="meta">{pub} &middot; <a href="{url_e}">source</a></div>
+          <div class="body">{body}</div>
+          <p class="back-to-top"><a href="#top">↑ Back to top</a></p>
+        </article>""")
+
+        tier_badge = "" if is_pri else (
+            '<span class="tier-badge">Investing-relevant</span>'
+        )
+        sections_html.append(f"""
+      <section class="cat" id="{anchor}">
+        <h2>{label}{tier_badge}</h2>
+        <ol class="article-list">
+          {''.join(list_items)}
+        </ol>
+        {''.join(article_blocks)}
+      </section>""")
+
+    nav_html = "\n        ".join(nav_links)
+    sub_text = (
+        f'{counts["primary"]} primary &middot; {counts["secondary"]} secondary '
+        f'&middot; {counts["total"]} total'
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="lt">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{title}</title>
-  <style>{_ARTICLE_CSS}</style>
+  <title>VŽ {today.isoformat()}</title>
+  <style>{_DIGEST_CSS}</style>
 </head>
-<body>
-  <h1>{title}</h1>
-  <div class="meta">
-    {label} &nbsp;&middot;&nbsp; {pub}
-    &nbsp;&middot;&nbsp; <a href="{url}">source</a>
+<body id="top">
+  <div class="digest-header">
+    <div class="wrap">
+      <h1>Verslo žinios &mdash; {today.isoformat()}</h1>
+      <div class="sub">{sub_text}</div>
+      <nav class="cat-nav">
+        {nav_html}
+      </nav>
+    </div>
   </div>
-  <div class="article-body">
-  {body}
-  </div>
-  <div class="footer">Source: <a href="{url}">{url}</a></div>
+  <main class="wrap">
+    {''.join(sections_html)}
+    <div class="digest-footer">VŽ daily digest &middot; generated {today.isoformat()}</div>
+  </main>
 </body>
 </html>"""
 
 
 # ── Build attachments ─────────────────────────────────────────────────────────
-def build_attachments(articles: list[dict]) -> list[dict]:
-    """One .html per article, named {section}_{index:02d}_{title_slug}.html."""
+def build_attachments(articles: list[dict], today: dt.date) -> list[dict]:
+    """One combined HTML file with sticky category nav + anchored articles."""
     by_section: dict[str, list[dict]] = defaultdict(list)
     for a in articles:
         by_section[a["section"]].append(a)
 
-    attachments = []
-    for section in sorted(by_section):
-        for idx, a in enumerate(by_section[section], 1):
-            slug     = _safe_name(a["title"])
-            filename = f"{section}_{idx:02d}_{slug}.html"
-            content  = _render_article_html(a)
-            attachments.append({"filename": filename, "content": content,
-                                 "subtype": "html"})
-    return attachments
+    counts = {
+        "primary":   sum(1 for a in articles if a.get("tier") == "primary"),
+        "secondary": sum(1 for a in articles if a.get("tier") == "secondary"),
+        "total":     len(articles),
+    }
+    main_html = _render_combined_html(by_section, today, counts)
+    return [{
+        "filename": f"vz-{today.isoformat()}.html",
+        "content":  main_html,
+        "subtype":  "html",
+    }]
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
@@ -787,41 +938,54 @@ def run() -> None:
 
     rss_items, diag = fetch_rss(since=since)
     newest = diag["newest"].isoformat() if diag["newest"] else "none"
+    n_primary_in   = sum(1 for x in rss_items if x.get("tier") == "primary")
+    n_secondary_in = sum(1 for x in rss_items if x.get("tier") == "secondary")
     log += [
-        f"RSS     : {diag['total']} entries | bozo={diag['bozo']}"
+        f"RSS       : {diag['total']} entries | bozo={diag['bozo']}"
         + (f" ({diag['bozo_exc']})" if diag["bozo"] else ""),
-        f"Newest  : {newest}",
-        f"No date : {diag['no_date']} | Too old: {diag['too_old']} "
-        f"| Skipped section: {diag['skipped_section']} | In window: {len(rss_items)}",
+        f"Newest    : {newest}",
+        f"No date   : {diag['no_date']} | Too old: {diag['too_old']} "
+        f"| Skipped section: {diag['skipped_section']} "
+        f"| Secondary no-kw title: {diag.get('secondary_no_kw_title', 0)}",
+        f"In window : {len(rss_items)} (primary={n_primary_in}, "
+        f"secondary={n_secondary_in})",
     ]
     print("\n".join(log))
 
+    today = now.date()
     if not rss_items:
         send_email(
-            f"VŽ articles {now.date().isoformat()} — RSS empty",
+            f"VŽ {today.isoformat()} — RSS empty",
             [_diag_attachment(log + ["→ No articles in the 26h window."])],
         )
         return
 
     articles = login_and_fetch(rss_items)
-    log.append(f"Fetched : {len(articles)} / {len(rss_items)} article bodies")
+    n_primary  = sum(1 for a in articles if a.get("tier") == "primary")
+    n_secondary = sum(1 for a in articles if a.get("tier") == "secondary")
+    log.append(
+        f"Fetched   : {len(articles)} / {len(rss_items)} bodies "
+        f"(primary={n_primary}, secondary={n_secondary})"
+    )
     print(log[-1])
 
     if not articles:
         send_email(
-            f"VŽ articles {now.date().isoformat()} — login/fetch failed",
+            f"VŽ {today.isoformat()} — login/fetch failed",
             [_diag_attachment(log + ["→ Login may have failed or all articles paywalled."])],
         )
         return
 
-    attachments = build_attachments(articles)
-    log.append(f"Sending : {len(attachments)} attachments")
-    attachments.insert(0, _diag_attachment(log))   # log as first attachment
-    send_email(
-        f"VŽ articles {now.date().isoformat()} — {len(articles)} articles",
-        attachments,
+    attachments = build_attachments(articles, today)
+    main_size_kb = len(attachments[0]["content"].encode("utf-8")) // 1024
+    log.append(f"Digest    : {main_size_kb} KB")
+    attachments.append(_diag_attachment(log))   # log as last attachment
+    subject = (
+        f"VŽ {today.isoformat()} — {len(articles)} articles "
+        f"({n_primary} primary + {n_secondary} secondary)"
     )
-    print(f"Done. Sent {len(attachments)} attachments.")
+    send_email(subject, attachments)
+    print(f"Done. Sent digest ({main_size_kb} KB) + log.")
 
 
 def main() -> None:
