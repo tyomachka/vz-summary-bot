@@ -12,6 +12,7 @@ Simple pipeline — no AI, no scoring:
 """
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import html as html_mod
 import os
@@ -149,19 +150,16 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
             try:
                 page.goto(item["url"], wait_until="domcontentloaded",
                           timeout=ARTICLE_TIMEOUT_MS)
-                # Trigger lazy-loaded images by scrolling to bottom.
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(800)
-                raw_html = page.content()
 
-                # VŽ lazy-loads images: real URL is in data-src, src holds a
-                # placeholder. Promote data-src → src so trafilatura keeps it.
-                fixed_html = _promote_lazy_src(raw_html)
+                # Scroll in steps so lazy images and JS-rendered widgets
+                # (charts, tables) actually mount before we capture the DOM.
+                _scroll_through(page)
 
                 # Plain text extraction — used only for length / paywall gates.
+                raw_html = page.content()
                 text = trafilatura.extract(
-                    fixed_html, include_links=False, include_tables=True,
-                    favor_recall=True,
+                    _promote_lazy_src(raw_html),
+                    include_links=False, include_tables=True, favor_recall=True,
                 ) or ""
                 if len(text) < 200:
                     print(f"  skip (short body {len(text)} chars): {item['url']}")
@@ -170,12 +168,27 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                     print(f"  skip (paywall): {item['url']}")
                     continue
 
-                # Structured extraction with images inline at original positions.
-                body_html = trafilatura.extract(
-                    fixed_html, output_format="html",
-                    include_links=False, include_images=True,
-                    include_tables=True, favor_recall=True,
-                ) or ""
+                # Replace JS-rendered widgets (charts, tables) with PNG
+                # screenshots so they survive in static HTML.
+                n_widgets = _inline_widgets_as_screenshots(page)
+
+                # Promote lazy <img data-src> to src in the live DOM, so
+                # the outerHTML we extract has real URLs.
+                page.evaluate(_PROMOTE_LAZY_JS)
+
+                # Pull the article container's outerHTML straight from DOM —
+                # preserves the original structure, image positions, headings.
+                body_html = page.evaluate(_EXTRACT_BODY_JS)
+
+                if not body_html or len(re.sub(r"<[^>]+>", "", body_html)) < 200:
+                    # DOM selector miss — fall back to trafilatura HTML.
+                    body_html = trafilatura.extract(
+                        _promote_lazy_src(page.content()),
+                        output_format="html", include_links=False,
+                        include_images=True, include_tables=True,
+                        favor_recall=True,
+                    ) or ""
+
                 body_html = _clean_body_html(body_html)
                 if not body_html:
                     print(f"  skip (no html body): {item['url']}")
@@ -184,7 +197,8 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
                 item["body_html"] = body_html
                 out.append(item)
                 n_imgs = body_html.count("<img")
-                print(f"  ok ({len(text)} chars, {n_imgs} images): {item['url']}")
+                print(f"  ok ({len(text)} chars, {n_imgs} imgs, "
+                      f"{n_widgets} widgets): {item['url']}")
             except PWTimeout:
                 print(f"  timeout: {item['url']}")
             except Exception as e:
@@ -192,6 +206,116 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
 
         browser.close()
     return out
+
+
+# ── DOM helpers (Playwright) ──────────────────────────────────────────────────
+# Article-body container selectors, tried in order. First hit wins.
+_BODY_SELECTORS = [
+    "article .article__body",
+    "article .article-body",
+    "article [itemprop='articleBody']",
+    "article",
+    "[itemprop='articleBody']",
+    "main article",
+    ".article__content",
+]
+
+_EXTRACT_BODY_JS = """
+() => {
+  const sels = %s;
+  let el = null;
+  for (const s of sels) { el = document.querySelector(s); if (el) break; }
+  if (!el) return null;
+  const clone = el.cloneNode(true);
+  // Strip non-content elements.
+  clone.querySelectorAll(
+    'script, style, noscript, iframe, ' +
+    '[class*="banner"], [class*="advert"], [class*="-ad"], [class*="ad-"], ' +
+    '[id*="banner"], [id*="advert"], [class*="related"], [class*="newsletter"], ' +
+    '[class*="subscribe"], [class*="share"], [class*="comment"], ' +
+    'aside, footer, nav, .vz-recommendations, .vz-paywall'
+  ).forEach(n => n.remove());
+  return clone.outerHTML;
+}
+""" % str(_BODY_SELECTORS)
+
+_PROMOTE_LAZY_JS = """
+() => {
+  document.querySelectorAll('img[data-src]').forEach(img => {
+    const real = img.getAttribute('data-src');
+    if (real) img.setAttribute('src', real);
+  });
+}
+"""
+
+def _scroll_through(page) -> None:
+    """Scroll top→bottom in chunks so lazy content (images + widgets) mounts."""
+    page.evaluate("""
+      async () => {
+        const step = Math.max(window.innerHeight, 600);
+        const total = document.body.scrollHeight;
+        for (let y = 0; y < total + step; y += step) {
+          window.scrollTo(0, y);
+          await new Promise(r => setTimeout(r, 250));
+        }
+        window.scrollTo(0, 0);
+      }
+    """)
+    page.wait_for_timeout(600)
+
+
+def _inline_widgets_as_screenshots(page) -> int:
+    """Replace JS-rendered chart/table widgets with PNG <img> screenshots
+    inlined as base64 data URLs, so they survive in the static HTML."""
+    # Tag each widget with a unique id so we can find it after the DOM mutates.
+    n_tagged = page.evaluate("""
+      () => {
+        const sel = 'figure.vz-widget, [x-vz-chart-data], div.vzwidget-vessel';
+        const els = document.querySelectorAll(sel);
+        let i = 0;
+        els.forEach(el => {
+          if (!el.id || !el.id.startsWith('__vzw_')) {
+            el.id = '__vzw_' + (i++);
+          }
+        });
+        return Array.from(els).map(el => el.id);
+      }
+    """)
+    if not n_tagged:
+        return 0
+
+    count = 0
+    for wid in n_tagged:
+        try:
+            h = page.query_selector(f"#{wid}")
+            if not h:
+                continue
+            box = h.bounding_box()
+            if not box or box["width"] < 80 or box["height"] < 60:
+                continue
+            h.scroll_into_view_if_needed(timeout=3000)
+            page.wait_for_timeout(200)
+            png = h.screenshot(type="png")
+            b64 = base64.b64encode(png).decode("ascii")
+            page.evaluate(
+                """({wid, b64}) => {
+                    const el = document.getElementById(wid);
+                    if (!el) return;
+                    const img = document.createElement('img');
+                    img.src = 'data:image/png;base64,' + b64;
+                    img.setAttribute('data-vz-widget', '1');
+                    img.style.maxWidth = '100%';
+                    img.style.height = 'auto';
+                    img.style.display = 'block';
+                    img.style.margin = '20px 0';
+                    el.replaceWith(img);
+                }""",
+                {"wid": wid, "b64": b64},
+            )
+            count += 1
+        except Exception as e:
+            print(f"    widget screenshot failed ({wid}): {e}")
+    return count
 
 
 # ── HTML cleanup helpers ──────────────────────────────────────────────────────
@@ -209,22 +333,26 @@ def _promote_lazy_src(raw_html: str) -> str:
 
 
 def _clean_body_html(body_html: str) -> str:
-    """Strip trafilatura's outer wrapper and unwanted attrs; drop tiny/icon images."""
-    # Strip outer <doc>/<main>/<body>/<html> wrappers if present.
+    """Strip trafilatura's outer wrapper and obvious non-content images."""
     body_html = re.sub(r'^\s*<(?:!DOCTYPE[^>]*>|html[^>]*>|body[^>]*>|main[^>]*>|doc[^>]*>)\s*',
                        '', body_html, flags=re.IGNORECASE)
     body_html = re.sub(r'\s*</(?:html|body|main|doc)>\s*$', '', body_html, flags=re.IGNORECASE)
 
-    # Drop images that are clearly not article content.
     def filter_img(m: re.Match) -> str:
         tag = m.group(0)
+        # Keep inlined widget screenshots (data: URLs).
+        if 'data-vz-widget' in tag or 'src="data:' in tag or "src='data:" in tag:
+            return tag
         src = re.search(r'\bsrc=(["\'])([^"\']+)\1', tag)
         if not src:
             return ""
         url = src.group(2)
-        if not url.startswith("http"):
+        if not url.startswith(("http://", "https://", "//", "data:")):
             return ""
-        if any(x in url for x in (".svg", "1x1", "pixel", "tracking", "logo")):
+        # Drop obvious non-content: 1x1 trackers, site logo, social icons.
+        bad = ("1x1", "pixel", "tracking", "/logo", "logo.svg",
+               "facebook.svg", "twitter.svg", "linkedin.svg")
+        if any(x in url.lower() for x in bad):
             return ""
         return tag
     return re.sub(r'<img\b[^>]*>', filter_img, body_html, flags=re.IGNORECASE)
