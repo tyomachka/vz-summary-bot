@@ -1,7 +1,9 @@
 """Fetch VŽ articles and email them as a single combined HTML digest.
 
 Pipeline:
-  1. Parse RSS for the last LOOKBACK_HOURS. Only PRIMARY_SECTIONS and
+  1. Parse RSS since the last successful run (timestamp in .last_fetch,
+     clamped to [now-MAX_LOOKBACK_H, now-MIN_LOOKBACK_H]; falls back to
+     DEFAULT_LOOKBACK_H on first run). Only PRIMARY_SECTIONS and
      SECONDARY_SECTIONS are considered. Secondary sections are pre-filtered
      by INVEST_KEYWORDS_RE on the title.
   2. Login to vz.lt (Playwright). For each article: dismiss CMP overlay,
@@ -44,7 +46,10 @@ from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright
 RSS_URL              = "https://www.vz.lt/rss"
 LOGIN_URL            = "https://prisijungimas.vz.lt/verslo-zinios"
 HOMEPAGE             = "https://www.vz.lt/"
-LOOKBACK_HOURS       = 26          # how far back to look for articles
+STATE_FILE           = ".last_fetch"   # ISO timestamp of last successful run
+DEFAULT_LOOKBACK_H   = 26          # used on first run when state file is absent
+MIN_LOOKBACK_H       = 1           # don't fetch a window narrower than this
+MAX_LOOKBACK_H       = 48          # cap window after long outages
 MAX_ARTICLES         = 60          # hard cap on articles fetched per run
 ARTICLE_TIMEOUT_MS   = 30_000
 
@@ -1062,18 +1067,33 @@ _DIGEST_CSS = """
   .digest-footer{margin:32px 0 0;padding:14px 0;border-top:1px solid #d0d7de;
        font-size:12px;color:#57606a;text-align:center}
   /* Investing brief at top of digest. */
-  section.brief{margin:24px 0 0;padding:18px 18px 8px;background:#f6f8fa;
-       border:1px solid #d0d7de;border-radius:8px;
+  section.brief{margin:24px 0 0;padding:20px 22px 14px;
+       background:linear-gradient(180deg,#f6f8fa 0%,#fbfcfd 100%);
+       border:1px solid #d0d7de;border-radius:10px;
+       box-shadow:0 1px 2px rgba(27,31,36,0.04);
        scroll-margin-top:calc(96px + env(safe-area-inset-top,0px))}
-  section.brief > h2{margin:0 0 10px;font-size:18px;color:#24292f}
-  section.brief > h3{margin:14px 0 6px;font-size:14px;color:#57606a;
-       text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
-  section.brief ul{margin:0 0 12px;padding-left:20px}
-  section.brief li{margin:6px 0;font-size:15px;line-height:1.55}
+  section.brief > h2{margin:0 0 14px;font-size:18px;color:#24292f;
+       display:flex;align-items:center;gap:10px;letter-spacing:-0.01em}
+  section.brief > h2::before{content:"";width:4px;height:18px;
+       background:#0969da;border-radius:2px;display:inline-block}
+  section.brief > h3{margin:16px 0 8px;font-size:11px;color:#57606a;
+       text-transform:uppercase;letter-spacing:0.08em;font-weight:700;
+       padding-bottom:6px;border-bottom:1px solid #eaeef2}
+  section.brief ul{margin:0 0 14px;padding:0;list-style:none}
+  section.brief li{margin:0;padding:8px 0 8px 22px;font-size:15px;
+       line-height:1.55;color:#1f2328;position:relative;
+       border-bottom:1px solid #f0f3f6}
+  section.brief li:last-child{border-bottom:none}
+  section.brief li::before{content:"";position:absolute;left:6px;top:16px;
+       width:5px;height:5px;border-radius:50%;background:#0969da}
   section.brief li a.src{color:#0969da;text-decoration:none;
-       font-size:13px;margin-left:4px;white-space:nowrap}
-  section.brief li a.src:hover{text-decoration:underline}
-  section.brief li a.src.alt{color:#57606a}
+       font-size:12px;margin-left:6px;white-space:nowrap;font-weight:500;
+       padding:1px 6px;border-radius:4px;background:rgba(9,105,218,0.08);
+       transition:background 0.15s}
+  section.brief li a.src:hover{background:rgba(9,105,218,0.16);
+       text-decoration:none}
+  section.brief li a.src.alt{color:#57606a;background:rgba(87,96,106,0.08)}
+  section.brief li a.src.alt:hover{background:rgba(87,96,106,0.16)}
   section.brief .empty{font-size:13px;color:#57606a;margin:0 0 8px;
        font-style:italic}
   body:has(details.cat-toggle[open]) section.brief{
@@ -1267,10 +1287,41 @@ def _diag_attachment(lines: list[str]) -> dict:
     return {"filename": "pipeline-log.html", "content": content}
 
 
+def _load_last_fetch() -> dt.datetime | None:
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            ts = f.read().strip()
+        return dt.datetime.fromisoformat(ts)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _save_last_fetch(ts: dt.datetime) -> None:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        f.write(ts.isoformat())
+
+
+def _compute_since(now: dt.datetime) -> tuple[dt.datetime, str]:
+    """Window starts at last successful fetch, clamped to [now-MAX, now-MIN].
+    Returns (since, source) where source is 'state'|'default'|'clamped-*'."""
+    last = _load_last_fetch()
+    if last is None:
+        return now - dt.timedelta(hours=DEFAULT_LOOKBACK_H), "default"
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=dt.timezone.utc)
+    floor = now - dt.timedelta(hours=MAX_LOOKBACK_H)
+    ceil  = now - dt.timedelta(hours=MIN_LOOKBACK_H)
+    if last < floor:
+        return floor, "clamped-max"
+    if last > ceil:
+        return ceil, "clamped-min"
+    return last, "state"
+
+
 def run() -> None:
-    now   = dt.datetime.now(tz=dt.timezone.utc)
-    since = now - dt.timedelta(hours=LOOKBACK_HOURS)
-    log   = [f"Window : {since.isoformat()} → {now.isoformat()}"]
+    now          = dt.datetime.now(tz=dt.timezone.utc)
+    since, src   = _compute_since(now)
+    log = [f"Window : {since.isoformat()} → {now.isoformat()} ({src})"]
 
     rss_items, diag = fetch_rss(since=since)
     newest = diag["newest"].isoformat() if diag["newest"] else "none"
@@ -1292,8 +1343,11 @@ def run() -> None:
     if not rss_items:
         send_email(
             f"VŽ {today.isoformat()} — RSS empty",
-            [_diag_attachment(log + ["→ No articles in the 26h window."])],
+            [_diag_attachment(log + [
+                f"→ No articles since {since.isoformat()}."
+            ])],
         )
+        _save_last_fetch(now)
         return
 
     articles = login_and_fetch(rss_items)
@@ -1342,6 +1396,7 @@ def run() -> None:
         f"({n_primary} primary + {n_secondary} secondary)"
     )
     send_email(subject, attachments)
+    _save_last_fetch(now)
     print(f"Done. Sent digest ({main_size_kb} KB) + log.")
 
 

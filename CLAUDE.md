@@ -8,7 +8,7 @@ A single-file Python script (`fetch_articles.py`) run by GitHub Actions on a dai
 
 ## Pipeline (sequential in `run()`)
 
-1. `fetch_rss()` — pull VŽ's RSS, keep articles published in the last `LOOKBACK_HOURS` (26h) window. Tier articles into `PRIMARY_SECTIONS` (always kept) and `SECONDARY_SECTIONS` (must match `INVEST_KEYWORDS_RE` on the title). Skip `SKIP_SECTIONS` and anything outside both tiers. Hard cap: `MAX_ARTICLES = 60`.
+1. `fetch_rss()` — pull VŽ's RSS, keep articles published since the last successful run (timestamp in `.last_fetch`, clamped to `[now-MAX_LOOKBACK_H, now-MIN_LOOKBACK_H]`; falls back to `DEFAULT_LOOKBACK_H` (26h) on first run). Tier articles into `PRIMARY_SECTIONS` (always kept) and `SECONDARY_SECTIONS` (must match `INVEST_KEYWORDS_RE` on the title). Skip `SKIP_SECTIONS` and anything outside both tiers. Hard cap: `MAX_ARTICLES = 60`.
 2. `login_and_fetch()` — Playwright headless Chromium logs in, dismisses the CMP/cookie overlay, and for each article: scrolls to mount lazy content, screenshots vz-widget / Infogram / Lukas Investments containers as inline base64 PNGs, promotes lazy `data-src` to `src`, then base64-inlines every remaining `<img>` (in-browser fetch first, then a server-side Playwright APIRequestContext fallback for cross-origin CDN URLs that fail CORS). Body HTML is the article container's outerHTML stripped of nav/byline/comments/breadcrumbs/Verslo Tribūna promos. Re-checks secondary articles against `INVEST_KEYWORDS_RE` on the body.
 3. `extract_facts()` — if `GEMINI_API_KEY` is set, runs Gemini 2.5 Flash per article with a strict response schema (`facts: [{statement, horizon, entities, fact_type}]`) and a system prompt that forbids inferences. Python-side validation drops facts whose entities don't appear verbatim (accent-folded) in the article body, then `SequenceMatcher` dedupes near-identical statements across articles. Bucketed into `short_term` and `long_term`, sorted by `fact_type` priority, capped at `BRIEF_MAX_PER_BUCKET = 12`.
 4. `build_attachments()` — render `_render_combined_html` into one file `vz-{date}.html` with sticky category nav (collapsible `<details open>`) and per-article anchors. Includes the Investing brief at the top when facts are present.
@@ -16,7 +16,7 @@ A single-file Python script (`fetch_articles.py`) run by GitHub Actions on a dai
 
 ## Failure path
 
-`main()` wraps `run()` in try/except. On any exception, it sends a failure email with the traceback as `error.html` attachment, then `sys.exit(1)`. There is no state file — every run looks back a fixed window, so a failed run replays naturally on the next cron.
+`main()` wraps `run()` in try/except. On any exception, it sends a failure email with the traceback as `error.html` attachment, then `sys.exit(1)`. The `.last_fetch` timestamp is only updated on successful send (or empty-RSS no-op), so a failed run replays naturally on the next cron from the same starting point.
 
 If RSS is empty, login fails, or all articles are paywalled, a diagnostic email is still sent so failures are visible.
 
@@ -31,11 +31,11 @@ If `GEMINI_API_KEY` is missing or the Gemini API errors, the brief is silently o
 - **scroll-margin-top is context-aware** via `:has(details.cat-toggle[open])` so anchor jumps land just below the nav whether the chip list is collapsed or expanded.
 - **Gemini grounding is enforced in Python**, not just by prompt: the entity-in-body check is what actually prevents hallucinated bullets from shipping. Keep it.
 - **No cross-article LLM reasoning.** Aggregation across articles is pure Python (dedup + sort). The model only sees one article at a time, so it can't synthesize false connections between them.
-- **No state file** — pipeline is stateless. Brief facts are not persisted; today's brief is regenerated fresh each run.
+- **State is just `.last_fetch`** — a single ISO timestamp committed back to the repo by the workflow. Brief facts are not persisted; today's brief is regenerated fresh each run.
 
 ## Workflow
 
-`.github/workflows/fetch-articles.yml` — cron `0 5 * * *` UTC + `workflow_dispatch`. Installs deps (including Chromium) and runs `python fetch_articles.py`. No `permissions: contents: write` needed.
+`.github/workflows/fetch-articles.yml` — three non-round cron triggers spread across the morning UTC + `workflow_dispatch`, plus a 0–45 min random `sleep` step on scheduled runs to jitter the actual login time. Later same-day triggers are no-ops because `_compute_since` clamps to `MIN_LOOKBACK_H`. Installs deps (including Chromium), runs `python fetch_articles.py`, then commits `.last_fetch` back to the repo. Needs `permissions: contents: write`.
 
 ## Running locally
 

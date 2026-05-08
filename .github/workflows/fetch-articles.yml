@@ -2,14 +2,21 @@ name: Fetch VŽ Articles
 
 on:
   schedule:
-    # 05:00 UTC = 08:00 EEST (summer) / 07:00 EET (winter)
-    - cron: '0 5 * * *'
+    # Multiple non-round triggers across the morning so the actual login
+    # time differs day-to-day. The script's last-fetch state file makes
+    # later triggers in the same day no-op (window clamps to MIN_LOOKBACK_H).
+    - cron: '23 5 * * *'   # ~08:23 EEST / 07:23 EET
+    - cron: '47 6 * * *'   # ~09:47 / 08:47
+    - cron: '11 8 * * *'   # ~11:11 / 10:11
   workflow_dispatch:
+
+permissions:
+  contents: write   # to commit the .last_fetch state file back
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +30,15 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
+      - name: Random pre-run jitter (0-45 min)
+        # Extra jitter on top of cron drift so the login doesn't pattern
+        # at the same minute every day. Skipped on manual dispatch.
+        if: github.event_name == 'schedule'
+        run: |
+          DELAY=$(( RANDOM % 2700 ))
+          echo "Sleeping ${DELAY}s before fetch..."
+          sleep "$DELAY"
+
       - name: Fetch and email articles
         env:
           VZ_EMAIL:        ${{ secrets.VZ_EMAIL }}
@@ -33,3 +49,20 @@ jobs:
           GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
           PYTHONIOENCODING: utf-8
         run: python fetch_articles.py
+
+      - name: Persist last-fetch timestamp
+        if: always()
+        run: |
+          if [ -f .last_fetch ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .last_fetch
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update last-fetch timestamp [skip ci]"
+              git push
+            else
+              echo "No state change to commit."
+            fi
+          else
+            echo "No .last_fetch file produced (run likely failed early)."
+          fi
