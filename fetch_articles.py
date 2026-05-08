@@ -124,6 +124,9 @@ def login_and_fetch(items: list[dict]) -> list[dict]:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(
             locale="lt-LT",
+            # Tall viewport so big Infogram iframes (often 2000+ px tall)
+            # render fully and can be screenshot in one go.
+            viewport={"width": 1280, "height": 1800},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -262,7 +265,11 @@ _EXTRACT_BODY_JS = """
     '[class*="info-tooltip"], [class*="info-icon"], [class*="tooltip"], ' +
     '[class*="related"], [class*="recommend"], [class*="newsletter"], ' +
     '[class*="subscribe"], [class*="share"], [class*="comment"], ' +
+    '[class*="discuss"], [class*="komentar"], ' +
     '[class*="social"], [class*="bookmark"], ' +
+    '[class*="author"], [class*="byline"], [class*="journalist"], ' +
+    '[class*="redaktor"], [class*="autorius"], ' +
+    '[itemprop="author"], [rel="author"], ' +
     '.vz-recommendations, .vz-paywall'
   ).forEach(n => n.remove());
 
@@ -284,7 +291,18 @@ _EXTRACT_BODY_JS = """
     'Klausyti Stabdyti Suskleisti',
     'Pagrindinis', 'Pagrindinis Automobiliai',
     'Skaityti', 'Spausdinti',
+    'Komentarai', 'Komentuoti', 'Pridėti komentarą',
   ]);
+  // Also drop links/buttons whose text starts with "Komentarai" (often
+  // rendered as 'Komentarai (12)' with a count suffix).
+  clone.querySelectorAll('a, button').forEach(node => {
+    const t = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (/^Komentar(ai|uoti)/i.test(t)) {
+      // Remove the link and any small wrapper around it.
+      const wrap = node.closest('div, section, aside, p');
+      (wrap && wrap.children.length <= 3 ? wrap : node).remove();
+    }
+  });
   const readingTimeRe = /^\\d{1,3}\\s*min\\.?$/;
   clone.querySelectorAll('div, span, section, p, figure').forEach(node => {
     const t = (node.textContent || '').replace(/\\s+/g, ' ').trim();
@@ -537,7 +555,14 @@ def _inline_widgets_as_screenshots(page) -> int:
             if not box or box["width"] < 80 or box["height"] < 60:
                 continue
             h.scroll_into_view_if_needed(timeout=3000)
-            page.wait_for_timeout(200)
+            # Iframe embeds (Infogram etc.) load their content async from a
+            # different origin — give them time to render before screenshot.
+            has_iframe = h.evaluate(
+                "el => el.tagName === 'IFRAME' || !!el.querySelector('iframe')"
+            )
+            page.wait_for_timeout(1500 if has_iframe else 250)
+            # Re-kill overlays in case CMP re-injected itself on scroll.
+            _kill_overlays(page)
             png = h.screenshot(type="png")
             b64 = base64.b64encode(png).decode("ascii")
             page.evaluate(
