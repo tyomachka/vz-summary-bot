@@ -746,31 +746,44 @@ def _clean_body_html(body_html: str) -> str:
 # ── HTML digest renderer ──────────────────────────────────────────────────────
 _DIGEST_CSS = """
   *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
   body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;
        margin:0;padding:0;color:#24292f;line-height:1.7;font-size:16px;
        background:#fff}
   .wrap{max-width:760px;margin:0 auto;padding:0 20px}
   .digest-header{background:#fff;border-bottom:1px solid #d0d7de;
-       padding:18px 0 8px;position:sticky;top:0;z-index:50;
+       padding:14px 0 6px;position:sticky;top:0;z-index:50;
        box-shadow:0 1px 4px rgba(0,0,0,0.04)}
-  .digest-header h1{margin:0 0 8px;font-size:22px;color:#24292f}
-  .digest-header .sub{font-size:13px;color:#57606a;margin-bottom:10px}
-  .cat-nav{display:flex;flex-wrap:wrap;gap:6px 8px;padding-bottom:8px}
+  .digest-header h1{margin:0 0 4px;font-size:20px;color:#24292f}
+  .digest-header .sub{font-size:12px;color:#57606a;margin-bottom:6px}
+  details.cat-toggle{margin:0;padding:0}
+  details.cat-toggle > summary{cursor:pointer;list-style:none;
+       padding:6px 0;font-size:13px;color:#0969da;font-weight:500;
+       user-select:none;display:flex;align-items:center;gap:6px}
+  details.cat-toggle > summary::-webkit-details-marker{display:none}
+  details.cat-toggle > summary::after{content:"\\25BE";
+       transition:transform .15s;display:inline-block;font-size:11px;
+       color:#57606a}
+  details.cat-toggle[open] > summary::after{transform:rotate(180deg)}
+  .cat-nav{display:flex;flex-wrap:wrap;gap:6px 8px;padding:6px 0 8px}
   .cat-nav a{display:inline-block;padding:5px 11px;border:1px solid #d0d7de;
        border-radius:999px;font-size:13px;color:#0969da;text-decoration:none;
        background:#f6f8fa;white-space:nowrap}
   .cat-nav a.secondary{color:#57606a;background:#fff}
   .cat-nav a:hover{background:#eaeef2}
-  section.cat{padding:32px 0 8px;border-top:1px solid #eaeef2;scroll-margin-top:90px}
+  main.wrap{padding-top:24px;padding-bottom:24px}
+  section.cat{padding:24px 0;border-top:1px solid #eaeef2;
+       scroll-margin-top:64px}
+  section.cat:first-of-type{border-top:none;padding-top:8px}
   section.cat > h2{font-size:20px;margin:0 0 12px;color:#24292f}
   section.cat .tier-badge{font-size:11px;color:#57606a;font-weight:normal;
        margin-left:8px;text-transform:uppercase;letter-spacing:0.5px}
-  ol.article-list{margin:0 0 24px;padding-left:24px}
+  ol.article-list{margin:0 0 16px;padding-left:24px}
   ol.article-list li{margin:6px 0}
   ol.article-list a{color:#0969da;text-decoration:none}
   ol.article-list a:hover{text-decoration:underline}
   article.entry{padding:24px 0;border-top:1px dashed #eaeef2;
-       scroll-margin-top:90px}
+       scroll-margin-top:64px}
   article.entry > h3{font-size:19px;line-height:1.35;margin:0 0 6px;color:#24292f}
   article.entry .meta{font-size:13px;color:#57606a;margin-bottom:18px}
   article.entry .meta a{color:#0969da;text-decoration:none}
@@ -786,9 +799,14 @@ _DIGEST_CSS = """
   article.entry .body p{margin:0 0 16px}
   article.entry .body h2,article.entry .body h3,article.entry .body h4{
        line-height:1.3;margin:22px 0 8px}
-  .back-to-top{margin:18px 0 0;font-size:13px;text-align:right}
-  .back-to-top a{color:#57606a;text-decoration:none}
-  .digest-footer{margin:40px 0;padding:14px 0;border-top:1px solid #d0d7de;
+  a.back-to-top-btn{position:fixed;right:18px;bottom:18px;z-index:60;
+       width:42px;height:42px;border-radius:50%;background:#24292f;
+       color:#fff;text-decoration:none;display:flex;align-items:center;
+       justify-content:center;font-size:20px;line-height:1;
+       box-shadow:0 2px 8px rgba(0,0,0,0.18);
+       border:1px solid rgba(255,255,255,0.08)}
+  a.back-to-top-btn:hover{background:#0969da}
+  .digest-footer{margin:32px 0 0;padding:14px 0;border-top:1px solid #d0d7de;
        font-size:12px;color:#57606a;text-align:center}
 """
 
@@ -837,7 +855,6 @@ def _render_combined_html(by_section: dict, today: dt.date,
           <h3>{title_e}</h3>
           <div class="meta">{pub} &middot; <a href="{url_e}">source</a></div>
           <div class="body">{body}</div>
-          <p class="back-to-top"><a href="#top">↑ Back to top</a></p>
         </article>""")
 
         tier_badge = "" if is_pri else (
@@ -871,15 +888,19 @@ def _render_combined_html(by_section: dict, today: dt.date,
     <div class="wrap">
       <h1>Verslo žinios &mdash; {today.isoformat()}</h1>
       <div class="sub">{sub_text}</div>
-      <nav class="cat-nav">
-        {nav_html}
-      </nav>
+      <details class="cat-toggle" open>
+        <summary>Categories</summary>
+        <nav class="cat-nav">
+          {nav_html}
+        </nav>
+      </details>
     </div>
   </div>
   <main class="wrap">
     {''.join(sections_html)}
     <div class="digest-footer">VŽ daily digest &middot; generated {today.isoformat()}</div>
   </main>
+  <a href="#top" class="back-to-top-btn" title="Back to top" aria-label="Back to top">↑</a>
 </body>
 </html>"""
 
