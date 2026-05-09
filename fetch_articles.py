@@ -1319,7 +1319,14 @@ def _compute_since(now: dt.datetime) -> tuple[dt.datetime, str]:
 
 
 def run() -> None:
-    now          = dt.datetime.now(tz=dt.timezone.utc)
+    now  = dt.datetime.now(tz=dt.timezone.utc)
+    last = _load_last_fetch()
+    if last is not None:
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=dt.timezone.utc)
+        if last.date() == now.date():
+            print("Digest already sent today — skipping.")
+            return
     since, src   = _compute_since(now)
     log = [f"Window : {since.isoformat()} → {now.isoformat()} ({src})"]
 
@@ -1404,17 +1411,7 @@ def main() -> None:
     try:
         run()
     except Exception:
-        tb = traceback.format_exc()
-        print(tb, file=sys.stderr)
-        try:
-            import html as _h
-            err_html = f"<pre style='font-size:12px'>{_h.escape(tb)}</pre>"
-            send_email(
-                f"VŽ fetcher FAILED {dt.datetime.now(tz=dt.timezone.utc).date()}",
-                [{"filename": "error.html", "content": err_html}],
-            )
-        except Exception as e2:
-            print(f"Failure email failed: {e2}", file=sys.stderr)
+        print(traceback.format_exc(), file=sys.stderr)
         sys.exit(1)
 
 

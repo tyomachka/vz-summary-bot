@@ -2,12 +2,12 @@ name: Fetch VŽ Articles
 
 on:
   schedule:
-    # Multiple non-round triggers across the morning so the actual login
-    # time differs day-to-day. The script's last-fetch state file makes
-    # later triggers in the same day no-op (window clamps to MIN_LOOKBACK_H).
+    # Three attempts ~1h24m apart. The script sends at most one digest per
+    # calendar day (UTC): once .last_fetch is today's date it exits early.
+    # On failure the run exits 1 (no email), and the next trigger retries.
     - cron: '23 5 * * *'   # ~08:23 EEST / 07:23 EET
-    - cron: '47 6 * * *'   # ~09:47 / 08:47
-    - cron: '11 8 * * *'   # ~11:11 / 10:11
+    - cron: '47 6 * * *'   # ~09:47 / 08:47  (retry 1)
+    - cron: '11 8 * * *'   # ~11:11 / 10:11  (retry 2)
   workflow_dispatch:
 
 permissions:
