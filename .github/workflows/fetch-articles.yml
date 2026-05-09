@@ -9,11 +9,6 @@ on:
     - cron: '47 6 * * *'   # ~09:47 / 08:47
     - cron: '11 8 * * *'   # ~11:11 / 10:11
   workflow_dispatch:
-    inputs:
-      run_now:
-        description: 'Skip MIN_LOOKBACK_H guard and fetch since last run regardless of recency'
-        type: boolean
-        default: false
 
 permissions:
   contents: write   # to commit the .last_fetch state file back
@@ -52,7 +47,6 @@ jobs:
           SMTP_PASSWORD:   ${{ secrets.SMTP_PASSWORD }}
           SMTP_TO:         ${{ secrets.SMTP_TO }}
           GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
-          RUN_NOW:         ${{ inputs.run_now }}
           PYTHONIOENCODING: utf-8
         run: python fetch_articles.py
 

@@ -1301,31 +1301,27 @@ def _save_last_fetch(ts: dt.datetime) -> None:
         f.write(ts.isoformat())
 
 
-def _compute_since(now: dt.datetime, force: bool = False) -> tuple[dt.datetime, str]:
+def _compute_since(now: dt.datetime) -> tuple[dt.datetime, str]:
     """Window starts at last successful fetch, clamped to [now-MAX, now-MIN].
-    Returns (since, source) where source is 'state'|'default'|'clamped-*'.
-    force=True skips the MIN_LOOKBACK_H lower bound so a manual run always fetches."""
+    Returns (since, source) where source is 'state'|'default'|'clamped-*'."""
     last = _load_last_fetch()
     if last is None:
         return now - dt.timedelta(hours=DEFAULT_LOOKBACK_H), "default"
     if last.tzinfo is None:
         last = last.replace(tzinfo=dt.timezone.utc)
     floor = now - dt.timedelta(hours=MAX_LOOKBACK_H)
+    ceil  = now - dt.timedelta(hours=MIN_LOOKBACK_H)
     if last < floor:
         return floor, "clamped-max"
-    if not force:
-        ceil = now - dt.timedelta(hours=MIN_LOOKBACK_H)
-        if last > ceil:
-            return ceil, "clamped-min"
+    if last > ceil:
+        return ceil, "clamped-min"
     return last, "state"
 
 
 def run() -> None:
     now          = dt.datetime.now(tz=dt.timezone.utc)
-    force        = os.environ.get("RUN_NOW", "").lower() in {"1", "true", "yes"}
-    since, src   = _compute_since(now, force=force)
-    log = [f"Window : {since.isoformat()} → {now.isoformat()} ({src})"
-           + (" [RUN_NOW]" if force else "")]
+    since, src   = _compute_since(now)
+    log = [f"Window : {since.isoformat()} → {now.isoformat()} ({src})"]
 
     rss_items, diag = fetch_rss(since=since)
     newest = diag["newest"].isoformat() if diag["newest"] else "none"
