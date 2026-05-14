@@ -18,6 +18,10 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      # Opt into Node 24 now; default flips June 2026. Silences the
+      # "Node.js 20 actions are deprecated" runner warning.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
       - uses: actions/checkout@v4
 
