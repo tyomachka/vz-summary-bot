@@ -2,12 +2,13 @@ name: Fetch VŽ Articles
 
 on:
   schedule:
-    # Three attempts ~1h24m apart. The script sends at most one digest per
-    # calendar day (UTC): once .last_fetch is today's date it exits early.
-    # On failure the run exits 1 (no email), and the next trigger retries.
-    - cron: '23 5 * * *'   # ~08:23 EEST / 07:23 EET
-    - cron: '47 6 * * *'   # ~09:47 / 08:47  (retry 1)
-    - cron: '11 8 * * *'   # ~11:11 / 10:11  (retry 2)
+    # Three attempts ~1h30m apart, first one at 14:00 EEST (11:00 UTC).
+    # The script sends at most one digest per calendar day (UTC): once
+    # .last_fetch is today's date it exits early. On failure the run exits 1
+    # (no email), and the next trigger retries. Jitter step adds 0-45 min.
+    - cron: '0 11 * * *'   # ~14:00-14:45 EEST / 13:00-13:45 EET
+    - cron: '30 12 * * *'  # ~15:30 EEST / 14:30 EET  (retry 1)
+    - cron: '0 14 * * *'   # ~17:00 EEST / 16:00 EET  (retry 2)
   workflow_dispatch:
 
 permissions:
