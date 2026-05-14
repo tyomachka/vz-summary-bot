@@ -93,6 +93,7 @@ GEMINI_TIMEOUT_S      = 30
 GEMINI_MAX_RETRY      = 2
 GEMINI_BODY_CHAR_CAP  = 6000          # truncate article body before sending
 BRIEF_MAX_PER_BUCKET  = 12            # cap visible bullets per horizon bucket
+BRIEF_MAX_TRADEABLE   = 8             # cap bullets in the MOST IMPORTANT bucket
 ENABLE_BRIEF          = bool(GEMINI_API_KEY)
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -800,6 +801,23 @@ lawsuit verdict.
 programs, demographic / labor shifts, multi-year policy, macro indicators.
   8. Classify fact_type as one of: earnings, ipo, m_and_a, leadership, \
 regulatory, policy, operational, macro, trend, other.
+  9. Set "tradeable" = true ONLY if BOTH conditions hold:
+     (a) the article names a SPECIFIC publicly tradeable asset — a \
+Nasdaq Baltic ticker (Ignitis, Šiaulių bankas, Telia LT, Auga, Tallink, \
+Apranga, Pieno žvaigždės, Grigeo, etc.), a major US/EU stock (NVIDIA, \
+Apple, ASML, etc.), a named cryptocurrency (Bitcoin, Ethereum, etc.), \
+or a tradeable commodity (oil/Brent/WTI, gold, natural gas, etc.); AND \
+     (b) a concrete catalyst event is described — earnings beat/miss, \
+dividend change, M&A, CEO change, regulatory ruling against the asset, \
+production outage, sanctions, supply shock, central-bank rate decision \
+affecting the asset. Vague sector commentary, opinion pieces, or \
+analyst forecasts WITHOUT a stated event = false.
+     Put the asset name (ticker or commodity) in "tradeable_asset". \
+For anything else set tradeable=false and tradeable_asset="".
+ 10. BAD tradeable: "Lithuania's GDP grew 2%", "tech sector is up", \
+"experts expect rate cuts". GOOD tradeable: "Ignitis Q1 net profit \
+€38M, up 12% YoY", "OPEC+ extends 2.2M bpd output cut through Q3", \
+"NVIDIA CEO visits Vilnius for AI summit on 2026-05-20".
 
 Output: strict JSON matching the supplied schema. No prose, no markdown.
 """
@@ -821,8 +839,11 @@ _GEMINI_RESPONSE_SCHEMA = {
                                  "regulatory", "policy", "operational",
                                  "macro", "trend", "other"],
                     },
+                    "tradeable":       {"type": "boolean"},
+                    "tradeable_asset": {"type": "string"},
                 },
-                "required": ["statement", "horizon", "entities", "fact_type"],
+                "required": ["statement", "horizon", "entities", "fact_type",
+                             "tradeable", "tradeable_asset"],
             },
         },
     },
@@ -858,6 +879,11 @@ def _validate_fact(fact: dict, article_body: str) -> bool:
     body_folded = _accent_fold(article_body)
     if not any(_entity_in_body(e, body_folded) for e in entities):
         return False
+    if fact.get("tradeable"):
+        asset = (fact.get("tradeable_asset") or "").strip()
+        if not _entity_in_body(asset, body_folded):
+            fact["tradeable"] = False
+            fact["tradeable_asset"] = ""
     return True
 
 
@@ -972,8 +998,11 @@ def extract_facts(articles: list[dict]) -> tuple[list[dict], dict]:
     return deduped, stats
 
 
-def _bucket_facts(facts: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Split into (short_term, long_term), sort within each bucket, cap."""
+def _bucket_facts(facts: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split into (most_important, short_term, long_term). Tradeable facts go
+    into most_important AND stay in their horizon bucket so users see them in
+    full context. Each bucket is sorted and capped."""
+    tradeable = [f for f in facts if f.get("tradeable")]
     short = [f for f in facts if f["horizon"] == "short_term"]
     long_ = [f for f in facts if f["horizon"] == "long_term"]
 
@@ -989,9 +1018,19 @@ def _bucket_facts(facts: list[dict]) -> tuple[list[dict], list[dict]]:
             -f["_published"].timestamp(),
         )
 
+    def key_trade(f):
+        prio = (_FACT_TYPE_PRIORITY_SHORT.get(f.get("fact_type", "other"), 99)
+                if f["horizon"] == "short_term"
+                else _FACT_TYPE_PRIORITY_LONG.get(f.get("fact_type", "other"), 99))
+        return (0 if f["horizon"] == "short_term" else 1,
+                prio, -f["_published"].timestamp())
+
+    tradeable.sort(key=key_trade)
     short.sort(key=key_short)
     long_.sort(key=key_long)
-    return short[:BRIEF_MAX_PER_BUCKET], long_[:BRIEF_MAX_PER_BUCKET]
+    return (tradeable[:BRIEF_MAX_TRADEABLE],
+            short[:BRIEF_MAX_PER_BUCKET],
+            long_[:BRIEF_MAX_PER_BUCKET])
 
 
 # ── HTML digest renderer ──────────────────────────────────────────────────────
@@ -1094,6 +1133,18 @@ _DIGEST_CSS = """
        text-decoration:none}
   section.brief li a.src.alt{color:#57606a;background:rgba(87,96,106,0.08)}
   section.brief li a.src.alt:hover{background:rgba(87,96,106,0.16)}
+  section.brief h3.most-important{color:#9a3412;border-bottom-color:#fed7aa;
+       font-size:12px}
+  section.brief ul.trade{background:linear-gradient(180deg,#fff7ed 0%,#fffbf5 100%);
+       border:1px solid #fed7aa;border-radius:8px;padding:4px 14px;
+       margin:0 0 16px}
+  section.brief ul.trade li{border-bottom-color:#fde8cf}
+  section.brief ul.trade li:last-child{border-bottom:none}
+  section.brief ul.trade li::before{background:#ea580c}
+  section.brief ul.trade .asset{display:inline-block;font-weight:700;
+       font-size:11px;letter-spacing:0.04em;color:#9a3412;
+       background:#fed7aa;padding:2px 7px;border-radius:4px;
+       margin-right:4px;text-transform:uppercase;vertical-align:1px}
   section.brief .empty{font-size:13px;color:#57606a;margin:0 0 8px;
        font-style:italic}
   body:has(details.cat-toggle[open]) section.brief{
@@ -1109,25 +1160,34 @@ def _article_anchor(section: str, idx: int) -> str:
     return f"a-{re.sub(r'[^a-z0-9-]', '', section.lower())}-{idx:02d}"
 
 
-def _render_brief_html(short_facts: list[dict],
+def _render_brief_html(tradeable_facts: list[dict],
+                       short_facts: list[dict],
                        long_facts: list[dict]) -> str:
     """Investing-brief block at the top of the digest, or empty string
-    if both buckets are empty."""
-    if not short_facts and not long_facts:
+    if all buckets are empty."""
+    if not tradeable_facts and not short_facts and not long_facts:
         return ""
 
-    def fact_li(f: dict) -> str:
+    def fact_li(f: dict, with_asset: bool = False) -> str:
         stmt = html_mod.escape(f["statement"])
         anchor = f["_anchor"]
+        asset_tag = ""
+        if with_asset and f.get("tradeable_asset"):
+            asset_tag = (f'<span class="asset">'
+                         f'{html_mod.escape(f["tradeable_asset"])}</span> ')
         links = [f'<a class="src" href="#{anchor}">→ source</a>']
         for extra in f.get("_other_anchors", []):
             links.append(
                 f'<a class="src alt" href="#{extra}">+</a>'
             )
-        return f'<li>{stmt} {"".join(links)}</li>'
+        return f'<li>{asset_tag}{stmt} {"".join(links)}</li>'
 
     parts = ['<section class="brief" id="brief">',
              '<h2>Investing brief</h2>']
+    if tradeable_facts:
+        parts.append('<h3 class="most-important">⚡ Most important — tradeable</h3><ul class="trade">')
+        parts.extend(fact_li(f, with_asset=True) for f in tradeable_facts)
+        parts.append('</ul>')
     if short_facts:
         parts.append('<h3>Short-term (1-2 days)</h3><ul>')
         parts.extend(fact_li(f) for f in short_facts)
@@ -1142,13 +1202,15 @@ def _render_brief_html(short_facts: list[dict],
 
 def _render_combined_html(by_section: dict, today: dt.date,
                           counts: dict,
+                          tradeable_facts: list[dict] | None = None,
                           short_facts: list[dict] | None = None,
                           long_facts: list[dict] | None = None) -> str:
     """One self-contained HTML page with sticky category nav and per-article
     anchors. Articles already have inline base64 images in body_html."""
+    tradeable_facts = tradeable_facts or []
     short_facts = short_facts or []
     long_facts  = long_facts  or []
-    brief_html  = _render_brief_html(short_facts, long_facts)
+    brief_html  = _render_brief_html(tradeable_facts, short_facts, long_facts)
 
     nav_links = []
     if brief_html:
@@ -1237,6 +1299,7 @@ def _render_combined_html(by_section: dict, today: dt.date,
 
 # ── Build attachments ─────────────────────────────────────────────────────────
 def build_attachments(articles: list[dict], today: dt.date,
+                      tradeable_facts: list[dict] | None = None,
                       short_facts: list[dict] | None = None,
                       long_facts: list[dict] | None = None) -> list[dict]:
     """One combined HTML file with sticky category nav + anchored articles."""
@@ -1251,6 +1314,7 @@ def build_attachments(articles: list[dict], today: dt.date,
     }
     main_html = _render_combined_html(
         by_section, today, counts,
+        tradeable_facts=tradeable_facts,
         short_facts=short_facts, long_facts=long_facts,
     )
     return [{
@@ -1378,7 +1442,7 @@ def run() -> None:
         log.append(f"Brief     : extracting facts via {GEMINI_MODEL}...")
         print(log[-1])
         kept_facts, brief_stats = extract_facts(articles)
-        short_facts, long_facts = _bucket_facts(kept_facts)
+        tradeable_facts, short_facts, long_facts = _bucket_facts(kept_facts)
         log.append(
             f"Brief     : processed={brief_stats['processed']} "
             f"raw={brief_stats['raw_facts']} "
@@ -1386,15 +1450,18 @@ def run() -> None:
             f"drop_dedup={brief_stats['drop_dedup']} "
             f"api_errors={brief_stats['api_errors']} "
             f"empty={brief_stats['empty']} | "
+            f"tradeable={len(tradeable_facts)} "
             f"short={len(short_facts)} long={len(long_facts)}"
         )
         print(log[-1])
     else:
         log.append("Brief     : disabled (no GEMINI_API_KEY)")
         print(log[-1])
-        short_facts, long_facts = [], []
+        tradeable_facts, short_facts, long_facts = [], [], []
 
-    attachments = build_attachments(articles, today, short_facts, long_facts)
+    attachments = build_attachments(
+        articles, today, tradeable_facts, short_facts, long_facts,
+    )
     main_size_kb = len(attachments[0]["content"].encode("utf-8")) // 1024
     log.append(f"Digest    : {main_size_kb} KB")
     attachments.append(_diag_attachment(log))   # log as last attachment
